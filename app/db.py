@@ -133,6 +133,11 @@ class TaskStore:
                 )
             return ids
 
+    def running_task_ids(self) -> set[str]:
+        with self.connect() as conn:
+            rows = conn.execute("SELECT id FROM tasks WHERE status = ?", (TaskStatus.RUNNING,)).fetchall()
+            return {row["id"] for row in rows}
+
     def mark_task(self, task_id: str, status: TaskStatus, error: str | None = None) -> None:
         finished = utc_now() if status in {
             TaskStatus.SUCCEEDED,

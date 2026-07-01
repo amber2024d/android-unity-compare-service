@@ -33,8 +33,8 @@ class TaskExecutor:
             versions = {version["id"]: version for version in task["versions"]}
             if not task["comparisons"]:
                 self._finish_unity_check(task_id, task["versions"])
-            for pair in task["comparisons"]:
-                self._finish_pair(task_id, pair, versions)
+            else:
+                await self._finish_pairs(task_id, task["comparisons"], versions)
 
             status = self._task_status(self.store.get_task(task_id))
             self.store.mark_task(task_id, status)
@@ -79,6 +79,15 @@ class TaskExecutor:
         version = versions[0]
         if version["status"] == VersionStatus.UNITY_DUMPABLE:
             self.store.add_artifact(task_id, None, "unity-check.json", f"{task_id}/unity-check.json", "application/json")
+
+    async def _finish_pairs(self, task_id: str, pairs: list[dict], versions: dict[str, dict]) -> None:
+        semaphore = asyncio.Semaphore(self.settings.compare_concurrency)
+
+        async def run_pair(pair: dict) -> None:
+            async with semaphore:
+                await asyncio.to_thread(self._finish_pair, task_id, pair, versions)
+
+        await asyncio.gather(*(run_pair(pair) for pair in pairs))
 
     def _finish_pair(self, task_id: str, pair: dict, versions: dict[str, dict]) -> None:
         old = versions[pair["oldVersionId"]]
@@ -130,7 +139,6 @@ class TaskExecutor:
     def _cleanup(self, task_id: str, failed: bool) -> None:
         if failed and self.settings.keep_failed_work_dir:
             return
-        # ponytail: executor is a placeholder; real dump/report cleanup will delete this populated task dir later.
         task_dir = Path(self.settings.work_dir) / task_id
         if task_dir.exists():
             import shutil

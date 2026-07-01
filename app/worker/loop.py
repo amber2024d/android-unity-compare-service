@@ -3,7 +3,7 @@ import time
 
 from app.config import get_settings
 from app.db import TaskStore
-from app.worker.cleanup import remove_expired_work_dirs
+from app.worker.cleanup import remove_expired_work_dirs, remove_orphan_work_dirs
 from app.worker.executor import TaskExecutor
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -16,6 +16,9 @@ def run_forever() -> None:
     store = TaskStore(settings.task_db_path)
     executor = TaskExecutor(settings, store)
     logger.info("compare worker started")
+    removed = remove_orphan_work_dirs(settings.work_dir, store.running_task_ids())
+    if removed:
+        logger.info("removed %s orphan work dirs", removed)
 
     while True:
         remove_expired_work_dirs(settings.work_dir, settings.work_dir_ttl_hours)

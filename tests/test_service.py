@@ -1,4 +1,6 @@
 import pytest
+import threading
+import time
 from fastapi.testclient import TestClient
 from zipfile import ZipFile
 
@@ -10,6 +12,7 @@ from app.models import PairCompareRequest
 from app.auth.service import AuthService
 from app.unity.compare import compare_dummy_dirs
 from app.unity.dumper import extract_unity_inputs, looks_like_unity_package
+from app.worker.cleanup import remove_orphan_work_dirs
 from app.worker.executor import TaskExecutor
 
 
@@ -198,6 +201,72 @@ def test_worker_executor_fails_pair_for_non_unity_package(tmp_path):
     assert task["status"] == "failed"
     assert task["progress"]["comparisonsFailed"] == 1
     assert task["versions"][0]["status"] == "unity_unsupported"
+
+
+def test_worker_uses_compare_concurrency(tmp_path, monkeypatch):
+    import asyncio
+
+    c = client(tmp_path)
+    task_id = c.post(
+        "/api/v1/batch-comparisons",
+        json={
+            "packageName": "com.example.game",
+            "versions": [
+                {"versionCode": "100", "versionName": "1.0.0"},
+                {"versionCode": "101", "versionName": "1.0.1"},
+                {"versionCode": "102", "versionName": "1.0.2"},
+            ],
+        },
+    ).json()["taskId"]
+    settings = get_settings()
+    settings.compare_concurrency = 2
+    store = TaskStore(settings.task_db_path)
+    task = store.get_task(task_id)
+    executor = TaskExecutor(settings, store, FakeApsClient(unity=True))
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+    seen = []
+
+    def fake_finish_pair(task_id, pair, versions):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.05)
+        with lock:
+            seen.append(pair["pairId"])
+            active -= 1
+
+    monkeypatch.setattr(executor, "_finish_pair", fake_finish_pair)
+    asyncio.run(executor._finish_pairs(task_id, task["comparisons"], {}))
+
+    assert max_active == 2
+    assert sorted(seen) == sorted(pair["pairId"] for pair in task["comparisons"])
+
+
+def test_startup_cleanup_removes_non_running_work_dirs(tmp_path):
+    c = client(tmp_path)
+    task_id = c.post(
+        "/api/v1/comparisons",
+        json={
+            "packageName": "com.example.game",
+            "oldVersion": {"versionCode": "100"},
+            "newVersion": {"versionCode": "101"},
+        },
+    ).json()["taskId"]
+    settings = get_settings()
+    store = TaskStore(settings.task_db_path)
+    assert store.claim_tasks(1) == [task_id]
+    running_dir = settings.work_dir / task_id
+    orphan_dir = settings.work_dir / "orphan-task"
+    running_dir.mkdir(parents=True)
+    orphan_dir.mkdir(parents=True)
+
+    assert remove_orphan_work_dirs(settings.work_dir, store.running_task_ids()) == 1
+
+    assert running_dir.exists()
+    assert not orphan_dir.exists()
 
 
 def test_aps_client_downloads_202_file_url(tmp_path):
