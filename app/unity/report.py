@@ -1,15 +1,32 @@
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
 from typing import Any
+
+import httpx
+
+
+AI_MODEL = "gpt-4.1"
+AI_TEMPERATURE = 1
+SYSTEM_PROMPT = """你是一名游戏版本更新分析师。把用户提供的 Unity DummyDll 对比 JSON 转成面向项目经理、制作人、运营和管理层的中文 Markdown 报告。
+
+输出包含：
+### **AI 智能分析**
+#### **一、核心摘要**
+#### **二、主要变更及业务价值**
+#### **三、更新规模与风险评估**
+
+重点说明新增/移除模块、Assembly-CSharp.dll 核心逻辑变化、SDK 或技术方案升级、稳定性风险。不要输出代码块。"""
 
 
 def write_html_report(report: dict[str, Any], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(render_html_report(report, output_path.with_suffix(".json")), encoding="utf-8")
+    output_path.write_text(render_html_report(report, output_path.with_suffix(".json"), generate_ai_analysis(report)), encoding="utf-8")
 
 
-def render_html_report(report: dict[str, Any], json_report_path: Path) -> str:
+def render_html_report(report: dict[str, Any], json_report_path: Path, ai_analysis: str | None = None) -> str:
     stats = report["overall_statistics"]
     summary = report["summary"]
 
@@ -84,8 +101,99 @@ def render_html_report(report: dict[str, Any], json_report_path: Path) -> str:
         added_dlls_section=_dll_list_section("新增的 DLL", summary["added_dlls"]),
         removed_dlls_section=_dll_list_section("删除的 DLL", summary["removed_dlls"]),
         detailed_comparisons=_detailed_comparisons(report["dll_comparisons"], json_report_path),
-        ai_analysis_section=_ai_analysis_section(),
+        ai_analysis_section=_ai_analysis_section(ai_analysis),
     )
+
+
+def generate_ai_analysis(report: dict[str, Any]) -> str | None:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return None
+    base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    try:
+        response = httpx.post(
+            f"{base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": os.environ.get("OPENAI_MODEL", AI_MODEL),
+                "temperature": AI_TEMPERATURE,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": json.dumps(_to_ai_summary(report), ensure_ascii=False, indent=2)},
+                ],
+            },
+            timeout=60,
+        )
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
+    except Exception as exc:
+        print(f"AI 分析生成失败: {exc}")
+        return None
+
+
+def _to_ai_summary(report: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "app_name": report.get("app_name"),
+        "old_version_name": report.get("old_version_name"),
+        "new_version_name": report.get("new_version_name"),
+        "overall_statistics": report.get("overall_statistics"),
+        "summary": {
+            "added_dlls": report["summary"].get("added_dlls", []),
+            "removed_dlls": report["summary"].get("removed_dlls", []),
+            "version_only_changes": report["summary"].get("version_only_changes", []),
+            "content_changes": report["summary"].get("content_changes", []),
+        },
+        "dll_comparisons": [_simplify_comparison(item) for item in report.get("dll_comparisons", []) if not _can_ignore_comparison(item)],
+    }
+
+
+def _can_ignore_comparison(comparison: dict[str, Any]) -> bool:
+    if comparison.get("comparison_type") == "version":
+        return not comparison.get("has_changes")
+    if comparison.get("comparison_type") in {"detailed", "detailed_no_version"}:
+        summary = comparison.get("changes_summary", {})
+        return not any(
+            summary.get(key, 0)
+            for key in ("added_classes", "removed_classes", "modified_classes", "sdk_version_changes")
+        )
+    return False
+
+
+def _simplify_comparison(comparison: dict[str, Any]) -> dict[str, Any]:
+    if comparison.get("comparison_type") not in {"detailed", "detailed_no_version"}:
+        return comparison
+    return {
+        "dll_name": comparison.get("dll_name"),
+        "comparison_type": comparison.get("comparison_type"),
+        "changes_summary": comparison.get("changes_summary"),
+        "added_classes": [_simplify_added_class(item) for item in comparison.get("added_classes", [])],
+        "removed_classes": [_simplify_removed_class(item) for item in comparison.get("removed_classes", [])],
+        "modified_classes": [
+            {"name": item.get("name"), "changes": item.get("changes")}
+            for item in comparison.get("modified_classes", [])
+        ],
+    }
+
+
+def _simplify_added_class(item: dict[str, Any]) -> dict[str, Any]:
+    details = item.get("details", {})
+    return {
+        "Namespace": details.get("Namespace"),
+        "Name": details.get("Name"),
+        "Methods": details.get("Methods"),
+        "Fields": details.get("Fields"),
+        "Properties": details.get("Properties"),
+        "Attributes": details.get("Attributes"),
+    }
+
+
+def _simplify_removed_class(item: dict[str, Any]) -> dict[str, Any]:
+    details = item.get("details", {})
+    return {
+        "Namespace": details.get("Namespace"),
+        "Name": details.get("Name"),
+        "Methods": details.get("Methods"),
+    }
 
 
 def _change_type_section(
@@ -311,7 +419,22 @@ def _format_detailed_comparison_safe(comp: dict[str, Any], json_report_path: Pat
     return html
 
 
-def _ai_analysis_section() -> str:
+def _ai_analysis_section(ai_analysis: str | None) -> str:
+    if ai_analysis:
+        return f"""
+            <div class="section ai-analysis">
+                <div id="ai-analysis-content" data-markdown="{_escape_html(ai_analysis)}">
+                    <div class="ai-loading">正在渲染分析内容...</div>
+                </div>
+            </div>
+            """
+    if os.environ.get("OPENAI_API_KEY"):
+        return """
+            <div class="section ai-analysis">
+                <h2>AI 智能分析</h2>
+                <div class="ai-error">AI 分析生成失败。请检查网络连接或 API 配置。</div>
+            </div>
+            """
     return """
             <div class="section ai-analysis">
                 <h2>AI 智能分析</h2>
@@ -383,6 +506,12 @@ HTML_TEMPLATE = """
             .section {{ margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; background-color: #fafafa; }}
             .ai-analysis {{ background-color: #f0f8ff; border: 2px solid #3498db; border-radius: 8px; padding: 20px; margin: 20px 0; }}
             .ai-analysis h3 {{ color: #2c3e50; margin-top: 0; }}
+            .ai-analysis h4 {{ color: #34495e; margin-top: 15px; }}
+            .ai-analysis ul {{ margin: 10px 0; padding-left: 25px; }}
+            .ai-analysis li {{ margin: 5px 0; }}
+            .ai-analysis strong {{ color: #2c3e50; }}
+            .ai-analysis em {{ font-style: italic; color: #555; }}
+            .ai-loading {{ text-align: center; padding: 40px; color: #999; }}
             .ai-error {{ background-color: #fee; border: 1px solid #fcc; border-radius: 4px; padding: 10px; color: #c33; }}
             .statistics-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }}
             .stat-card {{ background-color: white; padding: 15px; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); text-align: center; }}
@@ -502,6 +631,14 @@ HTML_TEMPLATE = """
         <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
         <script>
             document.addEventListener('DOMContentLoaded', function() {{
+                var aiAnalysisElement = document.getElementById('ai-analysis-content');
+                if (aiAnalysisElement && aiAnalysisElement.dataset.markdown) {{
+                    aiAnalysisElement.innerHTML = window.markdownit({{
+                        html: true,
+                        linkify: true,
+                        typographer: true
+                    }}).render(aiAnalysisElement.dataset.markdown);
+                }}
                 var accordions = document.getElementsByClassName("accordion");
                 for (var i = 0; i < accordions.length; i++) {{
                     accordions[i].addEventListener("click", function() {{

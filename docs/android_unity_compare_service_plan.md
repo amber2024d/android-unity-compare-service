@@ -196,6 +196,7 @@ REPORT_S3_SECRET_ACCESS_KEY=...
 
 OPENAI_API_KEY=...
 OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-4.1
 
 KEEP_FAILED_WORK_DIR=false
 WORK_DIR_TTL_HOURS=24
@@ -491,7 +492,7 @@ WORK_DIR/{task_id}/
 
 对比服务只抽象报告存储，不抽象包存储。
 
-当前最小实现先把报告文件复制到 `DATA_DIR/reports/{REPORT_STORAGE_PREFIX}/{taskId}/{pairId}/`，并把该路径作为 artifact `objectKey` 写入 SQLite。报告内容兼容主监控项目 `UnityUpdateMonitor.generate_full_report()` 的 JSON 顶层字段、`summary`、`overall_statistics` 和 `dll_comparisons` 结构；HTML 报告沿用主监控项目的统计、变更详情和详细对比区块。GCS/S3 接入后只替换 artifact 上传和签名 URL，不改变报告内容契约。
+当前最小实现先把报告文件复制到 `DATA_DIR/reports/{REPORT_STORAGE_PREFIX}/{taskId}/{pairId}/`，并把该路径作为 artifact `objectKey` 写入 SQLite。报告内容兼容主监控项目 `UnityUpdateMonitor.generate_full_report()` 的 JSON 顶层字段、`summary`、`overall_statistics` 和 `dll_comparisons` 结构；HTML 报告沿用主监控项目的统计、变更详情、详细对比和 AI 智能分析区块。配置 `OPENAI_API_KEY` 后，HTML 报告会调用 OpenAI-compatible `/chat/completions` 生成 Markdown 分析；未配置或调用失败时只在 HTML 中显示提示，不改变 JSON 报告内容契约。GCS/S3 接入后只替换 artifact 上传和签名 URL，不改变报告内容契约。
 
 接口：
 
@@ -552,7 +553,7 @@ services:
 1. [done] 搭 FastAPI、配置、SQLite 任务表、Docker Compose。
 2. [partial] 实现公开 `/discover` 和首页 `/`；OAuth 保护的首页随管理后台阶段接入。
 3. [done] 实现 APS client：API Key、`202` 轮询、`302` 跟随下载，并接入 worker。
-4. [partial] 迁移 Unity dump、对比、报告生成代码和二进制：已迁移 Il2CppDumper、DllAnalyzer 单文件二进制、DummyDll compare 和兼容内容报告；AI 分析仍待迁移或服务化。
+4. [done] 迁移 Unity dump、对比、报告生成代码和二进制：已迁移 Il2CppDumper、DllAnalyzer 单文件二进制、DummyDll compare、兼容内容报告和 HTML AI 分析调用。
 5. [done] 实现 Unity 可导校验和单 pair 对比：worker 已下载包、判断 libil2cpp/global-metadata，执行真实 dump，并对 DummyDll 生成 JSON/HTML 报告。
 6. [partial] 实现批量相邻对比：版本级任务建模、排序、下载复用和 pair 状态汇总已落地；当前执行器按 pair 顺序处理，后续再按 `COMPARE_CONCURRENCY` 做并发调度。
 7. 实现报告 GCS/S3 存储和 signed URL。
@@ -571,7 +572,7 @@ services:
 - `app/aps/client.py` 已具备下载接口、APS `202` 轮询和重定向跟随能力，并已接入执行器。
 - `app/unity/dumper.py` 支持扫描 APK/XAPK 内嵌 APK、提取 `libil2cpp.so`/`global-metadata.dat`，并在 `IL2CPP_DUMPER_PATH` 或仓库 `lib/product` 可用时运行 Il2CppDumper。
 - `app/unity/compare.py` 迁移主监控项目 DummyDll 对比逻辑，调用 `DllAnalyzer <dll> <output_json>` 分析 DLL，并按原项目字段结构生成 compare report。
-- `app/unity/report.py` 生成 HTML 报告，内容区块和字段读取方式兼容主监控项目；AI 分析区当前保留未配置提示。
+- `app/unity/report.py` 生成 HTML 报告，内容区块和字段读取方式兼容主监控项目；配置 `OPENAI_API_KEY` 时会调用 OpenAI-compatible API 生成 AI 智能分析，未配置或失败时保留提示。
 - `lib/product/Il2CppDumper/` 已从主监控项目迁入；Docker 默认使用 Linux 二进制，本地 macOS 会自动使用 osx 二进制。
 - `lib/product/DllAnalyzer/` 已从主监控项目重新发布为单文件二进制：Linux `linux-x64`、macOS `osx-arm64`。Docker 默认使用 Linux 版本。
 - `PROJECT_MAP.md` 记录当前代码入口和模块边界。
@@ -580,7 +581,6 @@ services:
 
 - 飞书 OAuth 管理后台和 API Key 管理页面；当前先用 `AUTH_ENABLED=true` + `API_KEYS=key1,key2` 做数据 API 门禁。
 - GCS/S3 报告 signed URL；当前查询返回 artifact objectKey，本地报告保存在 `DATA_DIR/reports/`。
-- AI 分析调用；当前报告内容先保持确定性的 DummyDll 差异，HTML 中显示未配置 AI 的提示。
 
 当前降级策略：
 

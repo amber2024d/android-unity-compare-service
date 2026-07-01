@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 from zipfile import ZipFile
 
@@ -8,6 +9,13 @@ from app.main import app
 from app.unity.compare import compare_dummy_dirs
 from app.unity.dumper import extract_unity_inputs, looks_like_unity_package
 from app.worker.executor import TaskExecutor
+
+
+@pytest.fixture(autouse=True)
+def clear_openai_env(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
 
 
 def client(tmp_path):
@@ -27,6 +35,7 @@ def test_health_and_discover(tmp_path):
     body = c.get("/discover").json()
     assert body["name"] == "Android Unity Compare Service"
     assert "/api/v1/comparisons" in body["auth"]["api_key_endpoints"]
+    assert "OPENAI_API_KEY" in body["config"]["variables"]
 
 
 def test_create_and_get_batch_task(tmp_path):
@@ -202,6 +211,32 @@ def test_compare_report_keeps_monitor_content_contract(tmp_path, monkeypatch):
     assert artifacts.html_path.exists()
 
 
+def test_html_report_includes_ai_analysis_when_configured(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "secret")
+    monkeypatch.setattr("app.unity.report.httpx.post", fake_openai_post)
+    old_dir = tmp_path / "old" / "DummyDll"
+    new_dir = tmp_path / "new" / "DummyDll"
+    old_dir.mkdir(parents=True)
+    new_dir.mkdir(parents=True)
+    for folder in (old_dir, new_dir):
+        (folder / "Sdk.dll").write_bytes(b"dll")
+    analyzer = tmp_path / "DllAnalyzer"
+    analyzer.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    monkeypatch.setattr("app.unity.compare.analyze_dll", fake_analyze_dll)
+    artifacts = compare_dummy_dirs(
+        old_dir,
+        new_dir,
+        tmp_path / "reports",
+        metadata={"package_name": "com.example.game", "old_version_name": "1.0.0", "new_version_name": "1.0.1"},
+        dll_analyzer_path=analyzer,
+    )
+
+    html = artifacts.html_path.read_text(encoding="utf-8")
+    assert "data-markdown=\"### **AI 智能分析**" in html
+    assert "AI 分析生成失败" not in html
+
+
 class FakeApsClient:
     def __init__(self, unity: bool):
         self.unity = unity
@@ -248,6 +283,17 @@ def fake_analyze_dll(dll_path, analyzer, timeout_seconds):
         version = "1.0.0" if dll_path.parent.parent.name == "old" else "1.1.0"
         return {"AssemblyName": "Sdk", "Version": version, "Classes": [], "SdkVersions": {}}
     return {"AssemblyName": dll_path.stem, "Version": "1.0.0", "Classes": [], "SdkVersions": {}}
+
+
+def fake_openai_post(*args, **kwargs):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "### **AI 智能分析**\n\n测试分析"}}]}
+
+    return Response()
 
 
 class FakeAsyncClient:
