@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 
 from app.aps.client import ApsClient
@@ -70,10 +71,10 @@ class TaskExecutor:
         await asyncio.gather(*(process(version) for version in task["versions"]))
 
     async def _download_version(self, task: dict, version: dict) -> Path | None:
-        target = Path(self.settings.work_dir) / task["taskId"] / "packages" / f"{version['id']}.apk"
+        target = Path(self.settings.work_dir) / task["taskId"] / "packages" / version["id"]
         self.store.mark_version(version["id"], VersionStatus.DOWNLOAD_RUNNING)
         try:
-            await self.aps_client.download(
+            target = await self.aps_client.download(
                 task["packageName"],
                 VersionRef(versionCode=version["versionCode"], versionName=version["versionName"]),
                 target,
@@ -110,7 +111,26 @@ class TaskExecutor:
     def _finish_unity_check(self, task_id: str, versions: list[dict]) -> None:
         version = versions[0]
         if version["status"] == VersionStatus.UNITY_DUMPABLE:
-            self.store.add_artifact(task_id, None, "unity-check.json", f"{task_id}/unity-check.json", "application/json")
+            package_name = self.store.get_task(task_id)["packageName"]
+            report_path = Path(self.settings.work_dir) / task_id / "reports" / "unity-check.json"
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "packageName": package_name,
+                        "versionCode": version["versionCode"],
+                        "versionName": version["versionName"],
+                        "status": version["status"],
+                        "dumpPath": version["dumpPath"],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            object_key = f"{self.settings.report_storage_prefix}/{package_name}/{task_id}/unity-check.json"
+            self.report_storage.upload_file(report_path, object_key, "application/json")
+            self.store.add_artifact(task_id, None, "unity-check.json", object_key, "application/json")
 
     async def _finish_pairs(self, task_id: str, pairs: list[dict], versions: dict[str, dict]) -> None:
         semaphore = asyncio.Semaphore(self.settings.compare_concurrency)

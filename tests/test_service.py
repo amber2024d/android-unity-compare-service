@@ -332,6 +332,8 @@ def test_unity_check_worker_adds_artifact(tmp_path, monkeypatch):
     task = c.get(f"/api/v1/tasks/{task_id}").json()
     assert task["status"] == "succeeded"
     assert task["artifacts"][0]["name"] == "unity-check.json"
+    report = settings.data_dir / "reports" / task["artifacts"][0]["objectKey"]
+    assert json.loads(report.read_text(encoding="utf-8"))["packageName"] == "com.example.game"
 
 
 def test_worker_stops_after_running_task_is_cancelled(tmp_path, monkeypatch):
@@ -639,8 +641,8 @@ def test_aps_client_downloads_202_file_url(tmp_path):
         )
     )
 
-    assert target.exists()
-    assert target.stat().st_size > 0
+    assert not target.exists()
+    assert target.with_suffix(".xapk").stat().st_size > 0
 
 
 def test_aps_client_edges(tmp_path):
@@ -781,6 +783,7 @@ def test_html_report_includes_ai_analysis_when_configured(tmp_path, monkeypatch)
     old_dir.mkdir(parents=True)
     new_dir.mkdir(parents=True)
     for folder in (old_dir, new_dir):
+        (folder / "Assembly-CSharp.dll").write_bytes(b"dll")
         (folder / "Sdk.dll").write_bytes(b"dll")
     analyzer = tmp_path / "DllAnalyzer"
     analyzer.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -797,6 +800,11 @@ def test_html_report_includes_ai_analysis_when_configured(tmp_path, monkeypatch)
     html = artifacts.html_path.read_text(encoding="utf-8")
     assert "data-markdown=\"### **AI 智能分析**" in html
     assert "AI 分析生成失败" not in html
+    assert ".tooltip .tooltiptext" in html
+    assert "Accordion error:" in html
+    assert "Chart initialization error:" in html
+    assert "legend: {" in html
+    assert "/api/reports/" in html
 
 
 def test_ai_analysis_payload_and_failure_branch(tmp_path, monkeypatch):
@@ -834,6 +842,9 @@ def test_ai_analysis_payload_and_failure_branch(tmp_path, monkeypatch):
     assert calls[0][0][0] == "https://ai.local/v1/chat/completions"
     assert calls[0][1]["headers"]["Authorization"] == "Bearer secret"
     assert calls[0][1]["json"]["model"] == "model-x"
+    assert "temperature" not in calls[0][1]["json"]
+    assert "顶级的技术分析师和产品策略顾问" in calls[0][1]["json"]["messages"][0]["content"]
+    assert "输出模板 (必须严格遵守)" in calls[0][1]["json"]["messages"][0]["content"]
     payload = json.loads(calls[0][1]["json"]["messages"][1]["content"])
     assert payload["old_version_name"] == "1.0.0"
     assert payload["summary"]["added_dlls"] == ["Added.dll"]
@@ -847,6 +858,41 @@ def test_ai_analysis_payload_and_failure_branch(tmp_path, monkeypatch):
     monkeypatch.setattr("app.unity.report.httpx.post", failing_post)
     failed_html = compare_dummy_dirs(old_dir, new_dir, tmp_path / "failed-report", dll_analyzer_path=analyzer).html_path.read_text(encoding="utf-8")
     assert "AI 分析生成失败" in failed_html
+
+
+def test_ai_analysis_retries_retryable_failure(tmp_path, monkeypatch):
+    calls = []
+
+    class Response:
+        text = "temporary"
+
+        def __init__(self, status_code):
+            self.status_code = status_code
+
+        def json(self):
+            return {"choices": [{"message": {"content": "ok after retry"}}]}
+
+    def flaky_post(*args, **kwargs):
+        calls.append((args, kwargs))
+        return Response(500 if len(calls) == 1 else 200)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "secret")
+    monkeypatch.setattr("app.unity.report.httpx.post", flaky_post)
+    monkeypatch.setattr("app.unity.report.time.sleep", lambda seconds: None)
+
+    from app.unity.report import generate_ai_analysis
+
+    report = {
+        "app_name": "com.example.game",
+        "old_version_name": "1.0.0",
+        "new_version_name": "1.0.1",
+        "overall_statistics": {"total_dlls": 1},
+        "summary": {"added_dlls": [], "removed_dlls": [], "version_only_changes": [], "content_changes": []},
+        "dll_comparisons": [],
+    }
+
+    assert generate_ai_analysis(report) == "ok after retry"
+    assert len(calls) == 2
 
 
 def test_local_and_s3_report_storage(tmp_path, monkeypatch):
@@ -1029,6 +1075,9 @@ def fake_analyze_dll(dll_path, analyzer, timeout_seconds):
 
 def fake_openai_post(*args, **kwargs):
     class Response:
+        status_code = 200
+        text = "ok"
+
         def raise_for_status(self):
             return None
 
@@ -1058,13 +1107,14 @@ class FakeAsyncClient:
             return FakeJsonResponse({"status": "failed", "error": "job failed"})
         if self.mode == "missing_file":
             return FakeJsonResponse({"status": "succeeded"})
-        return FakeJsonResponse({"status": "succeeded", "fileUrl": "/files/1.apk"})
+        return FakeJsonResponse({"status": "succeeded", "fileUrl": "/files/1.xapk"})
 
 
 class FakeStreamResponse:
     def __init__(self, status_code, body):
         self.status_code = status_code
         self.body = body
+        self.headers = {}
 
     async def __aenter__(self):
         return self

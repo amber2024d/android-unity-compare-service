@@ -311,7 +311,9 @@ GET /discover
       "DUMP_CONCURRENCY": {"default": "2", "description": "同时执行 Unity 检查和 Il2Cpp dump 的数量"},
       "COMPARE_CONCURRENCY": {"default": "2", "description": "同时执行 pair 对比的数量"},
       "REPORT_STORAGE_BACKEND": {"default": "local", "description": "报告存储后端：local/gcs/s3"},
-      "OPENAI_API_KEY": {"default": "", "description": "配置后 HTML 报告会调用 OpenAI-compatible API 生成 AI 分析；不在 discover 暴露真实值"}
+      "OPENAI_API_KEY": {"default": "", "description": "配置后 HTML 报告会调用 OpenAI-compatible API 生成 AI 分析；不在 discover 暴露真实值"},
+      "OPENAI_BASE_URL": {"default": "https://api.openai.com/v1", "description": "OpenAI-compatible API base URL"},
+      "OPENAI_MODEL": {"default": "gpt-4.1", "description": "AI 分析使用的模型；不传 temperature 参数"}
     }
   },
   "workflows": {
@@ -419,7 +421,7 @@ Authorization: Bearer <api-key>
 
 报告 signed URL 在查询时实时生成，不把会过期的 URL 固化进 SQLite。
 
-当前实现对 `REPORT_STORAGE_BACKEND=gcs|s3` 的 artifact 返回 `objectKey`、`contentType` 和实时 signed URL；`local` 后端只返回 `objectKey` 和 `contentType`。
+当前实现对 `REPORT_STORAGE_BACKEND=gcs|s3` 的 artifact 返回 `objectKey`、`contentType` 和实时 signed URL；`local` 后端只返回 `objectKey` 和 `contentType`。`unity-check` 成功时也会把 `unity-check.json` 写入同一套报告存储。
 
 ### 任务取消和重试
 
@@ -488,7 +490,7 @@ SQLite 至少保存四类记录：
 
 1. 调 APS `/api/v1/android/apps/{package}/download`。
 2. 带上 `Authorization: Bearer $APS_API_KEY`。
-3. APS 返回包文件时，直接流式写入 `WORK_DIR/{task_id}/packages/`。
+3. APS 返回包文件时，直接流式写入 `WORK_DIR/{task_id}/packages/`，本地文件使用内部 UUID 命名并保留响应文件的 `.apk`、`.xapk` 或 `.apks` 后缀。
 4. APS 返回 `302` 时，跟随 signed URL 并流式下载到本地。
 5. APS 返回 `202` 时，轮询 `statusUrl`，直到 `succeeded` 或 `failed`。
 6. 成功后访问 `fileUrl`，跟随 `302` 并下载到本地。
@@ -534,7 +536,7 @@ SQLite 至少保存四类记录：
 
 ```text
 WORK_DIR/{task_id}/
-  packages/
+  packages/  # UUID.apk / UUID.xapk / UUID.apks
   dumps/
   reports/
   tmp/
@@ -554,7 +556,7 @@ WORK_DIR/{task_id}/
 
 对比服务只抽象报告存储，不抽象包存储。
 
-当前实现先生成 `report.json` 和 `report.html`，再按 `REPORT_STORAGE_BACKEND=local|gcs|s3` 上传，并把对象 key 作为 artifact `objectKey` 写入 SQLite。`local` 后端复制到 `DATA_DIR/reports/{REPORT_STORAGE_PREFIX}/{packageName}/{taskId}/{pairId}/`；GCS/S3 后端上传到桶内同名 key。查询任务时实时生成 signed URL，不把过期 URL 固化进 SQLite。报告内容兼容主监控项目 `UnityUpdateMonitor.generate_full_report()` 的 JSON 顶层字段、`summary`、`overall_statistics` 和 `dll_comparisons` 结构；HTML 报告沿用主监控项目的统计、变更详情、详细对比和 AI 智能分析区块。配置 `OPENAI_API_KEY` 后，HTML 报告会调用 OpenAI-compatible `/chat/completions` 生成 Markdown 分析；未配置或调用失败时只在 HTML 中显示提示，不改变 JSON 报告内容契约。
+当前实现先生成 `report.json` 和 `report.html`，再按 `REPORT_STORAGE_BACKEND=local|gcs|s3` 上传，并把对象 key 作为 artifact `objectKey` 写入 SQLite；`unity-check` 生成 `unity-check.json` 并走同一套存储。`local` 后端复制到 `DATA_DIR/reports/{REPORT_STORAGE_PREFIX}/{packageName}/{taskId}/`；GCS/S3 后端上传到桶内同名 key。查询任务时实时生成 signed URL，不把过期 URL 固化进 SQLite。报告内容兼容主监控项目 `UnityUpdateMonitor.generate_full_report()` 的 JSON 顶层字段、`summary`、`overall_statistics` 和 `dll_comparisons` 结构；HTML 报告沿用主监控项目的统计、变更详情、详细对比和 AI 智能分析区块。配置 `OPENAI_API_KEY` 后，HTML 报告会调用 OpenAI-compatible `/chat/completions` 生成 Markdown 分析；模型由 `OPENAI_MODEL` 控制，默认 `gpt-4.1`，请求不传 `temperature` 参数；429、408、5xx 和网络抖动会短退避重试，未配置或最终失败时只在 HTML 中显示提示，不改变 JSON 报告内容契约。
 
 接口：
 
@@ -651,7 +653,7 @@ services:
 - `app/storage.py` 支持报告 local/GCS/S3 上传；查询任务时对 GCS/S3 artifact 实时生成 signed URL。
 - `app/unity/dumper.py` 支持扫描 APK/XAPK 内嵌 APK、提取 `libil2cpp.so`/`global-metadata.dat`，并在 `IL2CPP_DUMPER_PATH` 或仓库 `lib/product` 可用时运行 Il2CppDumper。
 - `app/unity/compare.py` 迁移主监控项目 DummyDll 对比逻辑，调用 `DllAnalyzer <dll> <output_json>` 分析 DLL，并按原项目字段结构生成 compare report。
-- `app/unity/report.py` 生成 HTML 报告，内容区块和字段读取方式兼容主监控项目；配置 `OPENAI_API_KEY` 时会调用 OpenAI-compatible API 生成 AI 智能分析，未配置或失败时保留提示。
+- `app/unity/report.py` 生成 HTML 报告，内容区块和字段读取方式兼容主监控项目；配置 `OPENAI_API_KEY` 时会调用 OpenAI-compatible API 生成 AI 智能分析，模型由 `OPENAI_MODEL` 控制且不传 `temperature` 参数，可重试错误会短退避重试，未配置或失败时保留提示。
 - `lib/product/Il2CppDumper/` 已从主监控项目迁入；Docker 默认使用 Linux 二进制，本地 macOS 会自动使用 osx 二进制。
 - `lib/product/DllAnalyzer/` 已从主监控项目重新发布为单文件二进制：Linux `linux-x64`、macOS `osx-arm64`。Docker 默认使用 Linux 版本。
 - `PROJECT_MAP.md` 记录当前代码入口和模块边界。

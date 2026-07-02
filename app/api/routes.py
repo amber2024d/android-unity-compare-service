@@ -210,7 +210,7 @@ def _discover_config_variables(settings: Settings) -> dict[str, dict[str, str]]:
         "REPORT_S3_SECRET_ACCESS_KEY": {"default": "", "description": "S3 secret key；不在 discover 暴露真实值"},
         "OPENAI_API_KEY": {"default": "", "description": "配置后 HTML 报告会调用 OpenAI-compatible API 生成 AI 分析；不在 discover 暴露真实值"},
         "OPENAI_BASE_URL": {"default": "https://api.openai.com/v1", "description": "OpenAI-compatible API base URL"},
-        "OPENAI_MODEL": {"default": "gpt-4.1", "description": "AI 分析使用的模型"},
+        "OPENAI_MODEL": {"default": "gpt-4.1", "description": "AI 分析使用的模型；不传 temperature 参数"},
         "KEEP_FAILED_WORK_DIR": {"default": str(settings.keep_failed_work_dir).lower(), "description": "失败任务是否保留本地工作目录"},
         "WORK_DIR_TTL_HOURS": {"default": str(settings.work_dir_ttl_hours), "description": "工作目录兜底清理 TTL"},
         "WORKER_POLL_SECONDS": {"default": str(settings.worker_poll_seconds), "description": "worker 轮询 queued 任务和完成任务的间隔"},
