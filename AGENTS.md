@@ -20,7 +20,8 @@
 - `docs/`：方案、接口、部署和迁移设计。
 - `app/`：FastAPI 服务源码。
 - `lib/product/`：后续放置 Unity dump/compare 所需二进制。
-- `docker-compose.yml`：云 VM 部署入口。
+- `docker-compose.yml`：云 VM 部署入口；云上叠加 `docker-compose.cloud.yml` + `.env.cloud`。
+- `deploy/`：AWS 控制台部署步骤（CONSOLE_DEPLOY.md）、Caddyfile、Litestream 模板。
 
 ## 工作要求
 

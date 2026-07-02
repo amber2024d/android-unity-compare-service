@@ -24,7 +24,7 @@ android-unity-compare-service/
     admin/routes.py      # 管理后台和 API Key 创建/吊销
     aps/client.py        # APS 下载 client，支持 202 轮询和重定向跟随
     storage.py           # 报告 local/GCS/S3 上传和 signed URL
-    worker/loop.py       # worker 主循环，按 TASK_CONCURRENCY 并发运行任务，启动时清理孤儿工作目录
+    worker/loop.py       # worker 主循环，按 TASK_CONCURRENCY 并发运行任务，启动时把中断的 running 任务标 failed 并清理孤儿工作目录
     worker/executor.py   # 按 DOWNLOAD/DUMP/COMPARE_CONCURRENCY 执行下载、dump 和 pair 对比
     worker/cleanup.py    # WORK_DIR 孤儿目录和 TTL 清理
     unity/dumper.py      # Unity 包判断、Il2CppDumper 输入提取和真实 dump 入口
@@ -33,8 +33,13 @@ android-unity-compare-service/
   tests/test_service.py  # API、鉴权、admin/OAuth、worker、APS、storage、AI、fake APS 端到端和报告内容契约 smoke tests
   lib/product/Il2CppDumper/
   lib/product/DllAnalyzer/
+  deploy/CONSOLE_DEPLOY.md  # AWS 控制台部署步骤（固定 On-Demand 实例 + EIP + S3）
+  deploy/Caddyfile          # 云上 HTTPS 终止与反代（Let's Encrypt 自动证书）
+  deploy/litestream.yml.tmpl  # tasks/auth SQLite → S3 灾备配置模板
   .env.example           # 环境变量模板，不包含真实 APS 地址或密钥
+  .env.cloud.example     # 云上部署 env 模板（域名/EIP 白名单/S3/IAM 角色说明）
   docker-compose.yml     # compare-api + compare-worker
+  docker-compose.cloud.yml  # 云上叠加：caddy + litestream + restart 策略 + S3 报告默认值
   Dockerfile
   pyproject.toml
 ```
@@ -65,6 +70,8 @@ android-unity-compare-service/
 - `.env.example` 提供本地和部署配置模板，不包含真实 APS 地址或密钥
 - Docker 镜像安装 .NET 8 和 .NET 9 runtime（非 SDK）以及 `libicu76`；Compose 固定 `linux/amd64`
 - `AUTH_ENABLED=true` 时支持飞书 OAuth 单管理员后台，API Key 创建/吊销；静态 `API_KEYS` 仍保留兼容
+- worker 启动时把上次中断的 running 任务标记为 failed（可 retry），再清理孤儿工作目录，配合云上更新部署
+- 云上部署形态：AWS 固定 On-Demand EC2 + EIP（出入站固定 IP，满足 `OPENAI_BASE_URL` 来源 IP 白名单）+ Caddy 自动 HTTPS + S3（报告 + Litestream 灾备），步骤见 `deploy/CONSOLE_DEPLOY.md`
 
 ## 本地运行
 

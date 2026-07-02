@@ -50,6 +50,14 @@ Compare VM
 
 公网只需要暴露 `compare-api`。APS 优先通过 VPC/private IP 访问；如果必须公网访问，APS API Key 必须开启。生产 APS 地址只通过 `APS_BASE_URL` 环境变量注入，不写入仓库默认值。
 
+### 云上部署（AWS 固定实例 + EIP）
+
+生产部署为单台 **On-Demand** EC2（不用 Spot：对比任务长达数小时，中断重跑浪费大）+ **EIP** 固定出入站 IP——`OPENAI_BASE_URL` 接口按来源 IP 白名单放行，域名 A 记录也直指 EIP。实例上 Docker Compose 跑四容器：`caddy`（80/443 自动 Let's Encrypt 证书，反代 compare-api）+ `compare-api` + `compare-worker` + `litestream`（把 `tasks.sqlite`/`auth.sqlite` 持续复制到 S3 做灾备，换机重建时先恢复再放行应用）。报告走 `REPORT_STORAGE_BACKEND=s3`，与 Litestream 备份同桶不同前缀；S3 凭证走实例 IAM 角色（`REPORT_S3_ACCESS_KEY_ID/SECRET` 留空，实例 IMDS hop limit 须为 2）。
+
+- 叠加配置：`docker-compose.cloud.yml`，环境变量模板 `.env.cloud.example`。
+- 控制台部署步骤、容量与机型、更新部署、灾备与故障排查见 `deploy/CONSOLE_DEPLOY.md`。
+- 更新部署会重启 worker：先确认没有 running 任务再升级；确实中断的任务由 worker 启动时标记为 `failed`，用 retry 重新提交。
+
 ## 技术选型
 
 - Python + FastAPI：提供任务提交、查询、管理接口。
@@ -117,7 +125,7 @@ android-unity-compare-service/
     auth/routes.py       # 飞书 OAuth 登录/回调/退出
     admin/routes.py      # 管理后台和 API Key 创建/吊销
     aps/client.py        # APS 下载 client，已接入 worker
-    worker/loop.py       # worker 主循环，按 TASK_CONCURRENCY 并发运行任务，启动时清理孤儿工作目录
+    worker/loop.py       # worker 主循环，按 TASK_CONCURRENCY 并发运行任务，启动时把中断的 running 任务标 failed 并清理孤儿工作目录
     worker/executor.py   # 按 DOWNLOAD/DUMP/COMPARE_CONCURRENCY 执行下载、dump 和 pair 对比
     worker/cleanup.py    # WORK_DIR 孤儿目录和 TTL 清理
     unity/dumper.py      # Unity 包判断、Il2CppDumper 输入提取和真实 dump 入口
@@ -127,7 +135,12 @@ android-unity-compare-service/
   PROJECT_MAP.md
   lib/product/Il2CppDumper/
   lib/product/DllAnalyzer/
+  deploy/CONSOLE_DEPLOY.md      # AWS 控制台部署步骤（固定实例 + EIP + S3）
+  deploy/Caddyfile              # 云上 HTTPS 终止与反代
+  deploy/litestream.yml.tmpl    # SQLite → S3 灾备配置模板
   docker-compose.yml
+  docker-compose.cloud.yml      # 云上叠加：caddy + litestream + S3 报告默认值
+  .env.cloud.example
   Dockerfile
   pyproject.toml
 ```
@@ -439,6 +452,8 @@ Authorization: Bearer <api-key>
 
 重试会基于原任务 payload 创建一个新的 queued 任务，返回新 `taskId` 和 `retryOf`，不复用旧任务的 artifact 或状态。
 
+worker 进程重启（更新部署、机器重启）时，上次中断的 running 任务会在启动时统一标记为 `failed`（error 注明因重启中断），调用方对这些任务 retry 即可重新提交。
+
 ## 任务模型
 
 任务状态：
@@ -545,7 +560,7 @@ WORK_DIR/{task_id}/
 清理规则：
 
 - 当前实现以任务结束整目录清理为主：任务结束时删除整个 `WORK_DIR/{task_id}`，包括包、dump 结果、报告和临时文件。
-- worker 启动时扫描 `WORK_DIR`，删除没有对应 running task 的任务目录。
+- worker 启动时先把中断的 running 任务标记为 `failed`，再扫描 `WORK_DIR`，删除没有对应 running task 的任务目录（中断任务的目录因此一并清理）。
 - TTL 清理会跳过当前 worker 进程正在运行的任务目录，避免长任务被误删。
 - 失败任务默认也清理本地目录；只有 `KEEP_FAILED_WORK_DIR=true` 时保留现场。
 - 增加兜底 TTL 清理，默认 `WORK_DIR_TTL_HOURS=24`。
@@ -637,6 +652,7 @@ services:
 9. [done] 实现成功、失败、worker 启动和 TTL 四类清理：任务结束整目录清理、worker 启动孤儿目录清理和 TTL 兜底清理已落地。
 10. [done] 增加 fake APS 或 mock APS 的 smoke test：已覆盖 API 提交、worker 执行、APS API Key、`202` 轮询、`fileUrl` 下载、Unity 检查、DummyDll compare 和报告 artifact 生成。
 11. [done] 实现 cancel/retry 接口：queued/running 任务可取消，任意已有任务可基于原 payload 重新提交。
+12. [done] 云上部署适配（AWS 固定 On-Demand 实例 + EIP + S3）：`docker-compose.cloud.yml`（caddy/litestream/S3 报告默认值）、`.env.cloud.example`、`deploy/CONSOLE_DEPLOY.md`，worker 启动把中断的 running 任务标 failed 以配合更新部署。
 
 ## 当前实现状态
 
