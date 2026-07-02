@@ -30,7 +30,7 @@ android-unity-compare-service/
     unity/dumper.py      # Unity 包判断、Il2CppDumper 输入提取和真实 dump 入口
     unity/compare.py     # DummyDll 对比，报告 JSON 内容兼容主监控项目
     unity/report.py      # HTML 报告生成，支持 OpenAI-compatible AI 分析
-  tests/test_service.py  # API、鉴权、worker、fake APS 端到端和报告内容契约 smoke tests
+  tests/test_service.py  # API、鉴权、admin/OAuth、worker、APS、storage、AI、fake APS 端到端和报告内容契约 smoke tests
   lib/product/Il2CppDumper/
   lib/product/DllAnalyzer/
   .env.example           # 环境变量模板，不包含真实 APS 地址或密钥
@@ -61,6 +61,7 @@ android-unity-compare-service/
 - `REPORT_STORAGE_BACKEND=local|gcs|s3` 支持报告上传；GCS/S3 查询任务时返回短期 signed URL
 - 生产 APS 地址和 API Key 只通过 `APS_BASE_URL` / `APS_API_KEY` 环境变量注入
 - fake APS 端到端 smoke 覆盖提交任务、APS API Key、`202` 轮询、`fileUrl` 下载、worker dump/compare 和报告 artifact 生成
+- 默认 pytest 覆盖 partial_failed、cancel/retry 边界、AI payload、本地/S3 报告存储参数和环境变量/Compose 对齐；Docker build 与 compare-api health smoke 已通过
 - `.env.example` 提供本地和部署配置模板，不包含真实 APS 地址或密钥
 - Docker 镜像安装 .NET 8 和 .NET 9 runtime（非 SDK）以及 `libicu76`；Compose 固定 `linux/amd64`
 - `AUTH_ENABLED=true` 时支持飞书 OAuth 单管理员后台，API Key 创建/吊销；静态 `API_KEYS` 仍保留兼容

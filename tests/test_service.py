@@ -1,9 +1,12 @@
 import pytest
 import http.server
 import ast
+import json
 import re
 import socketserver
+import sys
 import threading
+import types
 import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -14,8 +17,9 @@ from app.aps.client import ApsClient
 from app.config import get_settings
 from app.db import TaskStore
 from app.main import app
-from app.models import PairCompareRequest, TaskStatus
+from app.models import PairCompareRequest, TaskStatus, VersionStatus
 from app.auth.service import AuthService
+from app.storage import LocalReportStorage, S3ReportStorage
 from app.unity.compare import compare_dummy_dirs
 from app.unity.dumper import extract_unity_inputs, looks_like_unity_package
 from app.worker.cleanup import remove_expired_work_dirs, remove_orphan_work_dirs
@@ -46,6 +50,7 @@ def client(tmp_path):
 def test_health_and_discover(tmp_path):
     c = client(tmp_path)
     assert c.get("/health").json() == {"status": "ok"}
+    assert c.get("/").json()["discover"].endswith("/discover")
     body = c.get("/discover").json()
     assert body["name"] == "Android Unity Compare Service"
     assert "/api/v1/comparisons" in body["auth"]["api_key_endpoints"]
@@ -144,6 +149,24 @@ def test_cancel_queued_task_and_retry(tmp_path):
     assert c.get(f"/api/v1/tasks/{retried.json()['taskId']}").json()["status"] == "queued"
 
 
+def test_cancel_and_retry_edges(tmp_path):
+    c = client(tmp_path)
+    assert c.post("/api/v1/tasks/missing/cancel").status_code == 404
+    assert c.post("/api/v1/tasks/missing/retry").status_code == 404
+
+    task_id = c.post("/api/v1/unity-checks", json={"packageName": "com.example.game", "versionCode": "100"}).json()["taskId"]
+    store = TaskStore(get_settings().task_db_path)
+    store.mark_task(task_id, TaskStatus.SUCCEEDED)
+    assert c.post(f"/api/v1/tasks/{task_id}/cancel").status_code == 409
+
+    batch_id = c.post(
+        "/api/v1/batch-comparisons",
+        json={"packageName": "com.example.game", "versions": [{"versionCode": "100"}, {"versionCode": "101"}]},
+    ).json()["taskId"]
+    assert c.post(f"/api/v1/tasks/{task_id}/retry").json()["retryOf"] == task_id
+    assert c.post(f"/api/v1/tasks/{batch_id}/retry").json()["retryOf"] == batch_id
+
+
 def test_api_key_gate(tmp_path):
     c = client(tmp_path)
     settings = get_settings()
@@ -154,6 +177,18 @@ def test_api_key_gate(tmp_path):
         assert c.get("/api/v1/tasks/missing", headers={"X-API-Key": "secret"}).status_code == 404
     finally:
         get_settings.cache_clear()
+
+
+def test_api_key_bearer_and_disabled_gate(tmp_path):
+    c = client(tmp_path)
+    settings = get_settings()
+    settings.auth_enabled = True
+    settings.api_keys = "secret"
+    assert c.get("/api/v1/tasks/missing", headers={"Authorization": "Bearer secret"}).status_code == 404
+
+    settings.auth_api_key_enabled = False
+    assert c.get("/api/v1/tasks/missing").status_code == 404
+    get_settings.cache_clear()
 
 
 def test_admin_can_create_and_revoke_api_keys(tmp_path):
@@ -176,6 +211,23 @@ def test_admin_can_create_and_revoke_api_keys(tmp_path):
     key_id = created.json()["id"]
     assert c.post(f"/admin/api-keys/{key_id}/revoke", headers=cookie).status_code == 200
     assert c.get("/api/v1/tasks/missing", headers={"X-API-Key": raw_key}).status_code == 401
+
+
+def test_admin_key_edges_and_expired_session(tmp_path):
+    c = client(tmp_path)
+    settings = get_settings()
+    settings.auth_enabled = True
+    svc = AuthService(settings.auth_db_path, session_ttl_hours=settings.session_ttl_hours)
+    svc.register_or_check_admin("ou_admin", "Admin", "admin@example.com")
+    session = svc.create_session("ou_admin")
+    cookie = {"Cookie": f"auc_session={session.id}"}
+
+    assert c.post("/admin/api-keys", json={"name": ""}, headers=cookie).status_code == 400
+    assert c.post("/admin/api-keys/missing/revoke", headers=cookie).status_code == 404
+
+    expired = AuthService(settings.auth_db_path, session_ttl_hours=-1).create_session("ou_admin")
+    assert c.get("/admin", headers={"Cookie": f"auc_session={expired.id}"}, follow_redirects=False).status_code == 302
+    get_settings.cache_clear()
 
 
 def test_feishu_oauth_callback_creates_admin_session(tmp_path, monkeypatch):
@@ -207,6 +259,42 @@ def test_feishu_oauth_callback_creates_admin_session(tmp_path, monkeypatch):
     assert svc.get_admin().open_id == "ou_admin"
 
 
+def test_feishu_login_callback_edges_and_logout(tmp_path, monkeypatch):
+    c = client(tmp_path)
+    settings = get_settings()
+    settings.auth_enabled = True
+    settings.feishu_app_id = "cli_test"
+    svc = AuthService(settings.auth_db_path, session_ttl_hours=settings.session_ttl_hours)
+
+    login = c.get("/auth/login?next=/admin", follow_redirects=False)
+    assert login.status_code == 302
+    assert "client_id=cli_test" in login.headers["location"]
+    assert c.get("/auth/callback?error=access_denied").status_code == 400
+    assert c.get("/auth/callback?code=ok&state=bad").status_code == 400
+
+    svc.register_or_check_admin("ou_admin", "Admin", "admin@example.com")
+    state = svc.create_oauth_state("/admin")
+
+    async def fake_exchange_code(settings, code, redirect_uri):
+        return "token"
+
+    async def fake_fetch_other_user(settings, access_token):
+        class User:
+            open_id = "ou_other"
+            name = "Other"
+            email = "other@example.com"
+
+        return User()
+
+    monkeypatch.setattr("app.auth.feishu.exchange_code", fake_exchange_code)
+    monkeypatch.setattr("app.auth.feishu.fetch_user_info", fake_fetch_other_user)
+    assert c.get(f"/auth/callback?code=ok&state={state}").status_code == 403
+
+    session = svc.create_session("ou_admin")
+    assert c.get("/auth/logout", headers={"Cookie": f"auc_session={session.id}"}, follow_redirects=False).status_code == 302
+    assert svc.get_session(session.id) is None
+
+
 def test_worker_executor_marks_task_done(tmp_path, monkeypatch):
     c = client(tmp_path)
     task_id = c.post(
@@ -229,6 +317,21 @@ def test_worker_executor_marks_task_done(tmp_path, monkeypatch):
     assert task["status"] == "succeeded"
     assert task["progress"]["versionsDumped"] == 2
     assert task["progress"]["comparisonsCompleted"] == 1
+
+
+def test_unity_check_worker_adds_artifact(tmp_path, monkeypatch):
+    c = client(tmp_path)
+    task_id = c.post("/api/v1/unity-checks", json={"packageName": "com.example.game", "versionCode": "100"}).json()["taskId"]
+    settings = get_settings()
+    store = TaskStore(settings.task_db_path)
+    assert store.claim_tasks(1) == [task_id]
+    monkeypatch.setattr("app.worker.executor.dump_package", fake_dump_package)
+
+    TaskExecutor(settings, store, FakeApsClient(unity=True)).run(task_id)
+
+    task = c.get(f"/api/v1/tasks/{task_id}").json()
+    assert task["status"] == "succeeded"
+    assert task["artifacts"][0]["name"] == "unity-check.json"
 
 
 def test_worker_stops_after_running_task_is_cancelled(tmp_path, monkeypatch):
@@ -258,6 +361,38 @@ def test_worker_stops_after_running_task_is_cancelled(tmp_path, monkeypatch):
     executor.run(task_id)
 
     assert c.get(f"/api/v1/tasks/{task_id}").json()["status"] == "cancelled"
+
+
+def test_batch_compare_can_partially_fail(tmp_path, monkeypatch):
+    c = client(tmp_path)
+    task_id = c.post(
+        "/api/v1/batch-comparisons",
+        json={"packageName": "com.example.game", "versions": [{"versionCode": "100"}, {"versionCode": "101"}, {"versionCode": "102"}]},
+    ).json()["taskId"]
+    settings = get_settings()
+    store = TaskStore(settings.task_db_path)
+    assert store.claim_tasks(1) == [task_id]
+    monkeypatch.setattr("app.worker.executor.compare_dummy_dirs", fake_compare_dummy_dirs)
+    monkeypatch.setattr("app.worker.executor.build_report_storage", lambda _settings: FakeReportStorage())
+    executor = TaskExecutor(settings, store, FakeApsClient(unity=True))
+
+    async def fake_process_versions(task):
+        for index, version in enumerate(task["versions"]):
+            if index < 2:
+                dump_dir = settings.work_dir / task_id / "dumps" / version["id"] / "DummyDll"
+                dump_dir.mkdir(parents=True)
+                store.set_version_paths(version["id"], dump_path=dump_dir)
+                store.mark_version(version["id"], VersionStatus.UNITY_DUMPABLE)
+            else:
+                store.mark_version(version["id"], VersionStatus.UNITY_UNSUPPORTED, "not unity")
+
+    monkeypatch.setattr(executor, "_process_versions", fake_process_versions)
+    executor.run(task_id)
+
+    task = c.get(f"/api/v1/tasks/{task_id}").json()
+    assert task["status"] == "partial_failed"
+    assert task["progress"]["comparisonsCompleted"] == 1
+    assert task["progress"]["comparisonsFailed"] == 1
 
 
 def test_task_query_adds_report_signed_urls(tmp_path, monkeypatch):
@@ -508,6 +643,29 @@ def test_aps_client_downloads_202_file_url(tmp_path):
     assert target.stat().st_size > 0
 
 
+def test_aps_client_edges(tmp_path):
+    import asyncio
+
+    settings = get_settings()
+    settings.aps_base_url = "http://aps.local"
+    settings.aps_job_poll_seconds = 0
+    target = tmp_path / "app.apk"
+
+    asyncio.run(ApsClient(settings)._download_response(FakeAsyncClient(mode="direct"), "http://aps.local/download", target, headers={}, params={}))
+    assert target.exists()
+
+    with pytest.raises(ValueError, match="missing statusUrl"):
+        asyncio.run(ApsClient(settings)._download_response(FakeAsyncClient(mode="missing_status"), "http://aps.local/download", tmp_path / "missing.apk", headers={}, params={}))
+    with pytest.raises(ValueError, match="job failed"):
+        asyncio.run(ApsClient(settings)._download_response(FakeAsyncClient(mode="failed"), "http://aps.local/download", tmp_path / "failed.apk", headers={}, params={}))
+    with pytest.raises(ValueError, match="without fileUrl"):
+        asyncio.run(ApsClient(settings)._download_response(FakeAsyncClient(mode="missing_file"), "http://aps.local/download", tmp_path / "nofile.apk", headers={}, params={}))
+
+    settings.aps_base_url = ""
+    with pytest.raises(ValueError, match="APS_BASE_URL"):
+        asyncio.run(ApsClient(settings).download("pkg", type("Version", (), {"version_code": "1", "version_name": None})(), tmp_path / "app.apk"))
+
+
 def test_pair_compare_smoke_with_fake_aps_server(tmp_path, monkeypatch):
     c = client(tmp_path)
     settings = get_settings()
@@ -641,6 +799,91 @@ def test_html_report_includes_ai_analysis_when_configured(tmp_path, monkeypatch)
     assert "AI 分析生成失败" not in html
 
 
+def test_ai_analysis_payload_and_failure_branch(tmp_path, monkeypatch):
+    calls = []
+
+    def capture_openai_post(*args, **kwargs):
+        calls.append((args, kwargs))
+        return fake_openai_post(*args, **kwargs)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "secret")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://ai.local/v1")
+    monkeypatch.setenv("OPENAI_MODEL", "model-x")
+    monkeypatch.setattr("app.unity.report.httpx.post", capture_openai_post)
+
+    old_dir = tmp_path / "old" / "DummyDll"
+    new_dir = tmp_path / "new" / "DummyDll"
+    old_dir.mkdir(parents=True)
+    new_dir.mkdir(parents=True)
+    for name in ["Assembly-CSharp.dll", "Sdk.dll", "Removed.dll"]:
+        (old_dir / name).write_bytes(b"old")
+    for name in ["Assembly-CSharp.dll", "Sdk.dll", "Added.dll"]:
+        (new_dir / name).write_bytes(b"new")
+    analyzer = tmp_path / "DllAnalyzer"
+    analyzer.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr("app.unity.compare.analyze_dll", fake_analyze_dll)
+
+    compare_dummy_dirs(
+        old_dir,
+        new_dir,
+        tmp_path / "reports",
+        metadata={"package_name": "com.example.game", "old_version_name": "1.0.0", "new_version_name": "1.0.1"},
+        dll_analyzer_path=analyzer,
+    )
+
+    assert calls[0][0][0] == "https://ai.local/v1/chat/completions"
+    assert calls[0][1]["headers"]["Authorization"] == "Bearer secret"
+    assert calls[0][1]["json"]["model"] == "model-x"
+    payload = json.loads(calls[0][1]["json"]["messages"][1]["content"])
+    assert payload["old_version_name"] == "1.0.0"
+    assert payload["summary"]["added_dlls"] == ["Added.dll"]
+    assert payload["summary"]["removed_dlls"] == ["Removed.dll"]
+    assert payload["summary"]["content_changes"] == ["Assembly-CSharp.dll"]
+    assert payload["summary"]["version_only_changes"] == ["Sdk.dll"]
+
+    def failing_post(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("app.unity.report.httpx.post", failing_post)
+    failed_html = compare_dummy_dirs(old_dir, new_dir, tmp_path / "failed-report", dll_analyzer_path=analyzer).html_path.read_text(encoding="utf-8")
+    assert "AI 分析生成失败" in failed_html
+
+
+def test_local_and_s3_report_storage(tmp_path, monkeypatch):
+    source = tmp_path / "report.html"
+    source.write_text("ok", encoding="utf-8")
+    local = LocalReportStorage(tmp_path / "reports")
+    local.upload_file(source, "prefix/report.html", "text/html")
+    assert (tmp_path / "reports" / "prefix" / "report.html").read_text(encoding="utf-8") == "ok"
+    assert local.signed_url("prefix/report.html", 3600, "report.html") is None
+
+    class FakeS3Client:
+        def __init__(self):
+            self.upload = None
+            self.presign = None
+
+        def upload_file(self, filename, bucket, key, ExtraArgs):
+            self.upload = (filename, bucket, key, ExtraArgs)
+
+        def generate_presigned_url(self, operation, Params, ExpiresIn):
+            self.presign = (operation, Params, ExpiresIn)
+            return "https://signed.s3"
+
+    fake_client = FakeS3Client()
+    monkeypatch.setitem(sys.modules, "boto3", types.SimpleNamespace(client=lambda *args, **kwargs: fake_client))
+    settings = get_settings()
+    settings.report_s3_bucket = "bucket"
+    s3 = S3ReportStorage(settings)
+    s3.upload_file(source, "key", "text/html")
+    assert fake_client.upload == (str(source), "bucket", "key", {"ContentType": "text/html"})
+    assert s3.signed_url("key", 60, "report.html") == "https://signed.s3"
+    assert fake_client.presign == (
+        "get_object",
+        {"Bucket": "bucket", "Key": "key", "ResponseContentDisposition": 'attachment; filename="report.html"'},
+        60,
+    )
+
+
 class FakeApsClient:
     def __init__(self, unity: bool):
         self.unity = unity
@@ -730,6 +973,22 @@ def fake_dump_package(package_path, output_dir, **kwargs):
     return dummy
 
 
+def fake_compare_dummy_dirs(old_dir, new_dir, output_dir, **kwargs):
+    output_dir.mkdir(parents=True, exist_ok=True)
+    json_path = output_dir / "report.json"
+    html_path = output_dir / "report.html"
+    json_path.write_text("{}", encoding="utf-8")
+    html_path.write_text("<html></html>", encoding="utf-8")
+
+    class Artifacts:
+        pass
+
+    artifacts = Artifacts()
+    artifacts.json_path = json_path
+    artifacts.html_path = html_path
+    return artifacts
+
+
 class FakeReportStorage:
     def __init__(self):
         self.uploads = []
@@ -780,16 +1039,25 @@ def fake_openai_post(*args, **kwargs):
 
 
 class FakeAsyncClient:
-    def __init__(self):
+    def __init__(self, mode="202"):
+        self.mode = mode
         self.status_calls = 0
 
     def stream(self, method, url, params=None, headers=None):
+        if self.mode == "direct":
+            return FakeStreamResponse(200, unity_zip_bytes())
+        if self.mode == "missing_status":
+            return FakeStreamResponse(202, b'{}')
         if url.endswith("/download"):
             return FakeStreamResponse(202, b'{"statusUrl": "/jobs/1"}')
         return FakeStreamResponse(200, unity_zip_bytes())
 
     async def get(self, url, headers=None):
         self.status_calls += 1
+        if self.mode == "failed":
+            return FakeJsonResponse({"status": "failed", "error": "job failed"})
+        if self.mode == "missing_file":
+            return FakeJsonResponse({"status": "succeeded"})
         return FakeJsonResponse({"status": "succeeded", "fileUrl": "/files/1.apk"})
 
 
