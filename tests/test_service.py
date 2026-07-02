@@ -1,6 +1,9 @@
 import pytest
+import http.server
+import socketserver
 import threading
 import time
+from urllib.parse import parse_qs, urlparse
 from fastapi.testclient import TestClient
 from zipfile import ZipFile
 
@@ -408,6 +411,47 @@ def test_aps_client_downloads_202_file_url(tmp_path):
     assert target.stat().st_size > 0
 
 
+def test_pair_compare_smoke_with_fake_aps_server(tmp_path, monkeypatch):
+    c = client(tmp_path)
+    settings = get_settings()
+    settings.aps_api_key = "secret"
+    settings.aps_job_poll_seconds = 0
+    analyzer = tmp_path / "DllAnalyzer"
+    analyzer.write_text("#!/bin/sh\n", encoding="utf-8")
+    settings.dll_analyzer_path = analyzer
+    server = FakeApsServer()
+    settings.aps_base_url = server.url
+    monkeypatch.setattr("app.worker.executor.dump_package", fake_dump_package)
+    monkeypatch.setattr("app.worker.executor.build_report_storage", lambda _settings: FakeReportStorage())
+    try:
+        task_id = c.post(
+            "/api/v1/comparisons",
+            json={
+                "packageName": "com.example.game",
+                "oldVersion": {"versionCode": "100", "versionName": "1.0.0"},
+                "newVersion": {"versionCode": "101", "versionName": "1.0.1"},
+            },
+        ).json()["taskId"]
+        store = TaskStore(settings.task_db_path)
+        assert store.claim_tasks(1) == [task_id]
+
+        TaskExecutor(settings, store).run(task_id)
+
+        task = c.get(f"/api/v1/tasks/{task_id}").json()
+        assert task["status"] == "succeeded"
+        assert task["progress"]["versionsDownloaded"] == 2
+        assert task["progress"]["versionsDumped"] == 2
+        assert task["progress"]["comparisonsCompleted"] == 1
+        assert task["comparisons"][0]["status"] == "succeeded"
+        assert sorted(item["name"] for item in task["comparisons"][0]["artifacts"]) == ["report.html", "report.json"]
+        assert server.download_requests == 2
+        assert sorted(server.download_versions) == ["100", "101"]
+        assert server.status_requests >= 2
+        assert server.file_requests >= 2
+    finally:
+        server.close()
+
+
 def test_unity_detector_reads_nested_xapk(tmp_path):
     xapk = tmp_path / "game.xapk"
     nested = tmp_path / "base.apk"
@@ -513,6 +557,74 @@ class FakeApsClient:
             else:
                 archive.writestr("classes.dex", b"dex")
         return target
+
+
+class FakeApsServer:
+    def __init__(self):
+        self.download_requests = 0
+        self.download_versions = []
+        self.status_requests = 0
+        self.file_requests = 0
+        self._lock = threading.Lock()
+
+        owner = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.headers.get("Authorization") != "Bearer secret":
+                    self.send_response(401)
+                    self.end_headers()
+                    return
+                if self.path.startswith("/api/v1/android/apps/com.example.game/download"):
+                    with owner._lock:
+                        owner.download_requests += 1
+                        owner.download_versions.append(parse_qs(urlparse(self.path).query)["versionCode"][0])
+                    body = b'{"jobId":"1","status":"queued","statusUrl":"/api/v1/android/downloads/1","fileUrl":"/api/v1/android/downloads/1/file"}'
+                    self.send_response(202)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                if self.path == "/api/v1/android/downloads/1":
+                    with owner._lock:
+                        owner.status_requests += 1
+                    body = b'{"jobId":"1","status":"succeeded","fileUrl":"/api/v1/android/downloads/1/file"}'
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                if self.path == "/api/v1/android/downloads/1/file":
+                    with owner._lock:
+                        owner.file_requests += 1
+                    body = unity_zip_bytes()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/zip")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, format, *args):
+                return
+
+        class Server(socketserver.ThreadingTCPServer):
+            allow_reuse_address = True
+            daemon_threads = True
+
+        self._server = Server(("127.0.0.1", 0), Handler)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+        self.url = f"http://127.0.0.1:{self._server.server_address[1]}"
+
+    def close(self):
+        self._server.shutdown()
+        self._server.server_close()
+        self._thread.join(timeout=1)
 
 
 def fake_dump_package(package_path, output_dir, **kwargs):

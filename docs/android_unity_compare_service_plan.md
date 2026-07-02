@@ -563,7 +563,7 @@ services:
 7. [done] 实现报告 local/GCS/S3 存储和 signed URL。
 8. [done] 实现 API Key + 飞书 OAuth 管理后台，形态参考 APS。
 9. [done] 实现成功、失败、worker 启动和 TTL 四类清理：任务结束整目录清理、worker 启动孤儿目录清理和 TTL 兜底清理已落地。
-10. [partial] 增加 fake APS 或 mock APS 的 smoke test：当前覆盖 API 提交/查询和鉴权门禁。
+10. [done] 增加 fake APS 或 mock APS 的 smoke test：已覆盖 API 提交、worker 执行、APS API Key、`202` 轮询、`fileUrl` 下载、Unity 检查、DummyDll compare 和报告 artifact 生成。
 
 ## 当前实现状态
 
@@ -576,6 +576,7 @@ services:
 - `app/worker/loop.py` 可启动时清理非 running 的孤儿工作目录，按 `TASK_CONCURRENCY` 并发运行 queued task，并执行 TTL 兜底清理。
 - `app/worker/executor.py` 可执行 APS 下载、Unity 包判断、pair 成败汇总、按 `DOWNLOAD_CONCURRENCY`、`DUMP_CONCURRENCY`、`COMPARE_CONCURRENCY` 分段并发和任务结束清理。
 - `app/aps/client.py` 已具备下载接口、APS `202` 轮询和重定向跟随能力；`APS_BASE_URL` 和 `APS_API_KEY` 只通过环境变量注入。
+- `tests/test_service.py` 已包含 fake APS 端到端 smoke：本地 HTTP fake server 校验 APS API Key，返回 `202 statusUrl/fileUrl`，worker 完成下载、dump、对比和报告 artifact 写入。
 - `app/storage.py` 支持报告 local/GCS/S3 上传；查询任务时对 GCS/S3 artifact 实时生成 signed URL。
 - `app/unity/dumper.py` 支持扫描 APK/XAPK 内嵌 APK、提取 `libil2cpp.so`/`global-metadata.dat`，并在 `IL2CPP_DUMPER_PATH` 或仓库 `lib/product` 可用时运行 Il2CppDumper。
 - `app/unity/compare.py` 迁移主监控项目 DummyDll 对比逻辑，调用 `DllAnalyzer <dll> <output_json>` 分析 DLL，并按原项目字段结构生成 compare report。
