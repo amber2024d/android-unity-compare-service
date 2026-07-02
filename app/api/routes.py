@@ -82,7 +82,7 @@ async def discover(request: Request, settings: Settings = Depends(get_settings))
             "method": "POST",
             "path": "/api/v1/unity-checks",
             "auth": "api_key",
-            "request": {"packageName": "string", "versionCode": "string optional", "versionName": "string optional"},
+            "request": {"packageName": "string", "appName": "string optional", "versionCode": "string optional", "versionName": "string optional"},
             "response": {"status": 202, "body": {"taskId": "string", "status": "queued"}},
         },
         "single_compare": {
@@ -91,6 +91,7 @@ async def discover(request: Request, settings: Settings = Depends(get_settings))
             "auth": "api_key",
             "request": {
                 "packageName": "string",
+                "appName": "string optional",
                 "oldVersion": {"versionCode": "string optional", "versionName": "string optional"},
                 "newVersion": {"versionCode": "string optional", "versionName": "string optional"},
             },
@@ -102,6 +103,7 @@ async def discover(request: Request, settings: Settings = Depends(get_settings))
             "auth": "api_key",
             "request": {
                 "packageName": "string",
+                "appName": "string optional",
                 "versions": [{"versionCode": "string optional", "versionName": "string optional"}],
             },
             "response": {"status": 202, "body": {"taskId": "string", "status": "queued"}},
@@ -127,6 +129,7 @@ async def discover(request: Request, settings: Settings = Depends(get_settings))
         },
         "concepts": {
             "package_name": "Android 包名，是所有任务的应用标识。",
+            "app_name": "可选应用展示名，仅用于报告标题、页头和 AI 分析上下文；缺省时使用 packageName。",
             "version_selection": "versionCode 优先，versionName 兜底。",
             "task": "顶层异步任务，包含一个 Unity 校验、一个 pair 对比，或一个批量相邻对比。",
             "version": "任务内的某个版本，包含下载和 dump 状态。",

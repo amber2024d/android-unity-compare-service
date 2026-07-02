@@ -289,6 +289,7 @@ def task_response(
     pairs: list[dict[str, Any]],
     artifacts: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    payload = json.loads(task["payload"])
     artifact_map: dict[str | None, list[dict[str, str]]] = {}
     for artifact in artifacts:
         artifact_map.setdefault(artifact["pair_id"], []).append({
@@ -302,6 +303,7 @@ def task_response(
         "type": task["type"],
         "status": task["status"],
         "packageName": task["package_name"],
+        "appName": payload.get("appName"),
         "progress": {
             "versionsTotal": len(versions),
             "versionsDownloaded": sum(1 for row in versions if row["status"] in {

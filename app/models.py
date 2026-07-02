@@ -57,12 +57,14 @@ class VersionRef(BaseModel):
 
 class UnityCheckRequest(VersionRef):
     package_name: str = Field(alias="packageName")
+    app_name: str | None = Field(default=None, alias="appName")
 
 
 class PairCompareRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     package_name: str = Field(alias="packageName")
+    app_name: str | None = Field(default=None, alias="appName")
     old_version: VersionRef = Field(alias="oldVersion")
     new_version: VersionRef = Field(alias="newVersion")
 
@@ -71,6 +73,7 @@ class BatchCompareRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     package_name: str = Field(alias="packageName")
+    app_name: str | None = Field(default=None, alias="appName")
     versions: list[VersionRef] = Field(min_length=2)
 
 

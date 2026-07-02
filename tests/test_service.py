@@ -297,10 +297,17 @@ def test_feishu_login_callback_edges_and_logout(tmp_path, monkeypatch):
 
 def test_worker_executor_marks_task_done(tmp_path, monkeypatch):
     c = client(tmp_path)
+    metadata = {}
+
+    def capture_compare_dummy_dirs(old_dir, new_dir, output_dir, **kwargs):
+        metadata.update(kwargs["metadata"])
+        return fake_compare_dummy_dirs(old_dir, new_dir, output_dir, **kwargs)
+
     task_id = c.post(
         "/api/v1/comparisons",
         json={
             "packageName": "com.example.game",
+            "appName": "Example Game",
             "oldVersion": {"versionCode": "100", "versionName": "1.0.0"},
             "newVersion": {"versionCode": "101", "versionName": "1.0.1"},
         },
@@ -310,13 +317,16 @@ def test_worker_executor_marks_task_done(tmp_path, monkeypatch):
     store = TaskStore(settings.task_db_path)
     assert store.claim_tasks(1) == [task_id]
     monkeypatch.setattr("app.worker.executor.dump_package", fake_dump_package)
+    monkeypatch.setattr("app.worker.executor.compare_dummy_dirs", capture_compare_dummy_dirs)
     monkeypatch.setattr("app.worker.executor.build_report_storage", lambda _settings: FakeReportStorage())
     TaskExecutor(settings, store, FakeApsClient(unity=True)).run(task_id)
 
     task = c.get(f"/api/v1/tasks/{task_id}").json()
+    assert task["appName"] == "Example Game"
     assert task["status"] == "succeeded"
     assert task["progress"]["versionsDumped"] == 2
     assert task["progress"]["comparisonsCompleted"] == 1
+    assert metadata["app_name"] == "Example Game"
 
 
 def test_unity_check_worker_adds_artifact(tmp_path, monkeypatch):
@@ -799,6 +809,30 @@ def test_compare_report_keeps_monitor_content_contract(tmp_path, monkeypatch):
     assert report["summary"]["version_only_changes"] == ["Sdk.dll"]
     assert artifacts.json_path.exists()
     assert artifacts.html_path.exists()
+
+
+def test_html_report_uses_escaped_app_name(tmp_path, monkeypatch):
+    old_dir = tmp_path / "old" / "DummyDll"
+    new_dir = tmp_path / "new" / "DummyDll"
+    old_dir.mkdir(parents=True)
+    new_dir.mkdir(parents=True)
+    for folder in (old_dir, new_dir):
+        (folder / "Assembly-CSharp.dll").write_bytes(b"dll")
+    analyzer = tmp_path / "DllAnalyzer"
+    analyzer.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    monkeypatch.setattr("app.unity.compare.analyze_dll", fake_analyze_dll)
+    artifacts = compare_dummy_dirs(
+        old_dir,
+        new_dir,
+        tmp_path / "reports",
+        metadata={"app_name": "<Game>", "package_name": "com.example.game", "old_version_name": "1.0.0", "new_version_name": "1.0.1"},
+        dll_analyzer_path=analyzer,
+    )
+
+    html = artifacts.html_path.read_text(encoding="utf-8")
+    assert "<title>&lt;Game&gt; - Unity DummyDll 对比报告</title>" in html
+    assert "<h1>&lt;Game&gt; DummyDll 对比报告</h1>" in html
 
 
 def test_html_report_includes_ai_analysis_when_configured(tmp_path, monkeypatch):

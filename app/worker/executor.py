@@ -151,13 +151,15 @@ class TaskExecutor:
             return
         self.store.mark_pair(pair["pairId"], PairStatus.COMPARING)
         try:
-            package_name = self.store.get_task(task_id)["packageName"]
+            task = self.store.get_task(task_id)
+            package_name = task["packageName"]
             report_dir = Path(self.settings.work_dir) / task_id / "reports" / pair["pairId"]
             artifacts = compare_dummy_dirs(
                 Path(old["dumpPath"]),
                 Path(new["dumpPath"]),
                 report_dir,
                 metadata={
+                    "app_name": task.get("appName"),
                     "package_name": package_name,
                     "old_version_name": old["versionName"] or old["versionCode"],
                     "new_version_name": new["versionName"] or new["versionCode"],

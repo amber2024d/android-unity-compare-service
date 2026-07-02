@@ -271,6 +271,7 @@ GET /discover
   },
   "concepts": {
     "package_name": "Android 包名，是所有任务的应用标识。",
+    "app_name": "可选应用展示名，仅用于报告标题、页头和 AI 分析上下文；缺省时使用 packageName。",
     "version_selection": "versionCode 优先，versionName 兜底。",
     "task": "顶层异步任务，包含一个 Unity 校验、一个 pair 对比，或一个批量相邻对比。",
     "version": "任务内的某个版本，包含下载和 dump 状态。",
@@ -349,6 +350,7 @@ Content-Type: application/json
 
 {
   "packageName": "com.example.game",
+  "appName": "Example Game",
   "versionCode": "123",
   "versionName": "1.2.3"
 }
@@ -365,6 +367,7 @@ Content-Type: application/json
 
 {
   "packageName": "com.example.game",
+  "appName": "Example Game",
   "oldVersion": {"versionCode": "100", "versionName": "1.0.0"},
   "newVersion": {"versionCode": "101", "versionName": "1.0.1"}
 }
@@ -379,6 +382,7 @@ Content-Type: application/json
 
 {
   "packageName": "com.example.game",
+  "appName": "Example Game",
   "versions": [
     {"versionCode": "100", "versionName": "1.0.0"},
     {"versionCode": "101", "versionName": "1.0.1"},
@@ -408,6 +412,7 @@ Authorization: Bearer <api-key>
   "type": "batch_compare",
   "status": "running",
   "packageName": "com.example.game",
+  "appName": "Example Game",
   "progress": {
     "versionsTotal": 3,
     "versionsDownloaded": 2,
@@ -571,7 +576,7 @@ WORK_DIR/{task_id}/
 
 对比服务只抽象报告存储，不抽象包存储。
 
-当前实现先生成 `report.json` 和 `report.html`，再按 `REPORT_STORAGE_BACKEND=local|gcs|s3` 上传，并把对象 key 作为 artifact `objectKey` 写入 SQLite；`unity-check` 生成 `unity-check.json` 并走同一套存储。`local` 后端复制到 `DATA_DIR/reports/{REPORT_STORAGE_PREFIX}/{packageName}/{taskId}/`；GCS/S3 后端上传到桶内同名 key。查询任务时实时生成 signed URL，不把过期 URL 固化进 SQLite。报告内容兼容主监控项目 `UnityUpdateMonitor.generate_full_report()` 的 JSON 顶层字段、`summary`、`overall_statistics` 和 `dll_comparisons` 结构；HTML 报告沿用主监控项目的统计、变更详情、详细对比和 AI 智能分析区块。配置 `OPENAI_API_KEY` 后，HTML 报告会调用 OpenAI-compatible `/chat/completions` 生成 Markdown 分析；模型由 `OPENAI_MODEL` 控制，默认 `gpt-4.1`，请求不传 `temperature` 参数；429、408、5xx 和网络抖动会短退避重试，未配置或最终失败时只在 HTML 中显示提示，不改变 JSON 报告内容契约。
+当前实现先生成 `report.json` 和 `report.html`，再按 `REPORT_STORAGE_BACKEND=local|gcs|s3` 上传，并把对象 key 作为 artifact `objectKey` 写入 SQLite；`unity-check` 生成 `unity-check.json` 并走同一套存储。`local` 后端复制到 `DATA_DIR/reports/{REPORT_STORAGE_PREFIX}/{packageName}/{taskId}/`；GCS/S3 后端上传到桶内同名 key。查询任务时实时生成 signed URL，不把过期 URL 固化进 SQLite。报告内容兼容主监控项目 `UnityUpdateMonitor.generate_full_report()` 的 JSON 顶层字段、`summary`、`overall_statistics` 和 `dll_comparisons` 结构；HTML 报告沿用主监控项目的统计、变更详情、详细对比和 AI 智能分析区块。请求可选 `appName` 会写入报告的 `app_name` 用作 HTML 标题、页头和 AI 分析上下文；缺省时使用 `packageName`。配置 `OPENAI_API_KEY` 后，HTML 报告会调用 OpenAI-compatible `/chat/completions` 生成 Markdown 分析；模型由 `OPENAI_MODEL` 控制，默认 `gpt-4.1`，请求不传 `temperature` 参数；429、408、5xx 和网络抖动会短退避重试，未配置或最终失败时只在 HTML 中显示提示，不改变 JSON 报告内容契约。
 
 接口：
 

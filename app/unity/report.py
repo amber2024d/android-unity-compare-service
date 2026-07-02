@@ -130,16 +130,17 @@ def render_html_report(report: dict[str, Any], json_report_path: Path, ai_analys
     new_version_name = report.get("new_version_name")
 
     if app_name:
-        title = f"{app_name} - Unity DummyDll 对比报告"
-        header_title = f"{app_name} DummyDll 对比报告"
+        safe_app_name = _escape_html(app_name)
+        title = f"{safe_app_name} - Unity DummyDll 对比报告"
+        header_title = f"{safe_app_name} DummyDll 对比报告"
     else:
         title = "Unity DummyDll 完整对比报告"
         header_title = "Unity DummyDll 完整对比报告"
 
     if old_version_name and new_version_name:
-        version_comparison = f"{old_version_name} → {new_version_name}"
+        version_comparison = f"{_escape_html(old_version_name)} → {_escape_html(new_version_name)}"
     else:
-        version_comparison = f"{Path(report['old_directory']).name} → {Path(report['new_directory']).name}"
+        version_comparison = f"{_escape_html(Path(report['old_directory']).name)} → {_escape_html(Path(report['new_directory']).name)}"
 
     return HTML_TEMPLATE.format(
         title=title,

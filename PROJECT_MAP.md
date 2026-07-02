@@ -62,6 +62,7 @@ android-unity-compare-service/
 - 仓库内置 `lib/product/Il2CppDumper`，Docker 默认使用 Linux 版本
 - 仓库内置 `lib/product/DllAnalyzer` 单文件二进制，Docker 默认使用 Linux 版本
 - DummyDll compare 已迁入，产出 `report.json` 和 `report.html`，JSON 内容结构兼容主监控项目
+- 提交任务可选 `appName`；任务查询回显该字段，报告标题、页头和 AI 分析上下文优先使用展示名，缺省使用 `packageName`
 - 配置 `OPENAI_API_KEY` 后，HTML 报告会调用 OpenAI-compatible API 生成 AI 智能分析；JSON 报告内容不写入 AI 结果
 - `REPORT_STORAGE_BACKEND=local|gcs|s3` 支持报告上传；GCS/S3 查询任务时返回短期 signed URL
 - 生产 APS 地址和 API Key 只通过 `APS_BASE_URL` / `APS_API_KEY` 环境变量注入
