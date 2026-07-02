@@ -25,7 +25,7 @@ android-unity-compare-service/
     aps/client.py        # APS 下载 client，支持 202 轮询和重定向跟随
     storage.py           # 报告 local/GCS/S3 上传和 signed URL
     worker/loop.py       # worker 主循环，按 TASK_CONCURRENCY 并发运行任务，启动时清理孤儿工作目录
-    worker/executor.py   # 下载包、判断 Unity 可 dump、按 COMPARE_CONCURRENCY 并发处理 pair
+    worker/executor.py   # 按 DOWNLOAD/DUMP/COMPARE_CONCURRENCY 执行下载、dump 和 pair 对比
     worker/cleanup.py    # WORK_DIR 孤儿目录和 TTL 清理
     unity/dumper.py      # Unity 包判断、Il2CppDumper 输入提取和真实 dump 入口
     unity/compare.py     # DummyDll 对比，报告 JSON 内容兼容主监控项目
@@ -49,7 +49,7 @@ android-unity-compare-service/
 - `GET /api/v1/tasks/{taskId}`
 - SQLite 保存 `task`、`version`、`pair`、`artifact`
 - worker 可启动清理非 running 的孤儿工作目录，按 `TASK_CONCURRENCY` 并发运行 queued task，调用 APS 下载包，判断 Unity 可 dump，并在配置 Il2CppDumper 时执行真实 dump
-- 批量相邻对比复用版本 dump 结果，并按 `COMPARE_CONCURRENCY` 并发执行 pair 对比
+- 批量相邻对比复用版本 dump 结果，并按 `DOWNLOAD_CONCURRENCY`、`DUMP_CONCURRENCY`、`COMPARE_CONCURRENCY` 分段并发
 - 仓库内置 `lib/product/Il2CppDumper`，Docker 默认使用 Linux 版本
 - 仓库内置 `lib/product/DllAnalyzer` 单文件二进制，Docker 默认使用 Linux 版本
 - DummyDll compare 已迁入，产出 `report.json` 和 `report.html`，JSON 内容结构兼容主监控项目

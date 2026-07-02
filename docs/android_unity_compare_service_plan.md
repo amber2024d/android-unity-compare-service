@@ -14,7 +14,7 @@
 - 校验指定版本是否是可 dump 的 Unity 包。
 - 提交单个对比任务：包名 + 两个版本。
 - 提交多版本批量对比任务：包名 + 版本列表，相邻版本递增对比。
-- 通过环境变量控制顶层任务和 pair 对比并发数量；下载、dump 并发保留配置入口，后续再接入执行器。
+- 通过环境变量控制顶层任务、下载、dump 和 pair 对比并发数量。
 - 查询任务状态、批量对比进度、失败原因和报告下载地址。
 - 通过 Docker Compose 部署到云 VM。
 
@@ -118,7 +118,7 @@ android-unity-compare-service/
     admin/routes.py      # 管理后台和 API Key 创建/吊销
     aps/client.py        # APS 下载 client，已接入 worker
     worker/loop.py       # worker 主循环，按 TASK_CONCURRENCY 并发运行任务，启动时清理孤儿工作目录
-    worker/executor.py   # 下载包、判断 Unity 可 dump、按 COMPARE_CONCURRENCY 并发处理 pair
+    worker/executor.py   # 按 DOWNLOAD/DUMP/COMPARE_CONCURRENCY 执行下载、dump 和 pair 对比
     worker/cleanup.py    # WORK_DIR 孤儿目录和 TTL 清理
     unity/dumper.py      # Unity 包判断、Il2CppDumper 输入提取和真实 dump 入口
     unity/compare.py     # DummyDll 目录对比，内容契约兼容主监控项目
@@ -265,8 +265,8 @@ GET /discover
   "config": {
     "variables": {
       "TASK_CONCURRENCY": {"default": "2", "description": "同时运行的顶层任务数"},
-      "DOWNLOAD_CONCURRENCY": {"default": "4", "description": "预留配置；当前版本下载阶段按任务内版本顺序执行"},
-      "DUMP_CONCURRENCY": {"default": "2", "description": "预留配置；当前版本 dump 阶段按任务内版本顺序执行"},
+      "DOWNLOAD_CONCURRENCY": {"default": "4", "description": "同时从 APS 下载包的数量"},
+      "DUMP_CONCURRENCY": {"default": "2", "description": "同时执行 Unity 检查和 Il2Cpp dump 的数量"},
       "COMPARE_CONCURRENCY": {"default": "2", "description": "同时执行 pair 对比的数量"}
     }
   },
@@ -440,15 +440,15 @@ SQLite 至少保存四类记录：
 使用环境变量控制并发：
 
 - `TASK_CONCURRENCY`：worker 同时运行的顶层任务数。
-- `DOWNLOAD_CONCURRENCY`：预留配置；当前版本下载阶段按任务内版本顺序执行。
-- `DUMP_CONCURRENCY`：预留配置；当前版本 dump 阶段按任务内版本顺序执行。
+- `DOWNLOAD_CONCURRENCY`：同时从 APS 下载包的数量。
+- `DUMP_CONCURRENCY`：同时执行 Unity 检查和 Il2Cpp dump 的数量。
 - `COMPARE_CONCURRENCY`：同时执行 pair 对比的数量。
 
 多版本任务流程：
 
 1. 规范化版本列表并排序。
 2. 创建相邻 pair，例如 `1 -> 2`、`2 -> 3`。
-3. 下载并 dump 所有版本，当前实现按版本顺序执行，后续可继续接入 `DOWNLOAD_CONCURRENCY` 和 `DUMP_CONCURRENCY`。
+3. 按 `DOWNLOAD_CONCURRENCY` 并发下载版本包；每个版本下载完成后按 `DUMP_CONCURRENCY` 进入 Unity 检查和 dump。
 4. 所有版本状态确定后，按 `COMPARE_CONCURRENCY` 并发执行相邻 pair 对比。
 5. pair 两端任一版本不可 dump 时，只失败包含该版本的 pair。
 6. pair 对比完成后上传报告目录。
@@ -557,7 +557,7 @@ services:
 3. [done] 实现 APS client：API Key、`202` 轮询、`302` 跟随下载，并接入 worker。
 4. [done] 迁移 Unity dump、对比、报告生成代码和二进制：已迁移 Il2CppDumper、DllAnalyzer 单文件二进制、DummyDll compare、兼容内容报告和 HTML AI 分析调用。
 5. [done] 实现 Unity 可导校验和单 pair 对比：worker 已下载包、判断 libil2cpp/global-metadata，执行真实 dump，并对 DummyDll 生成 JSON/HTML 报告。
-6. [done] 实现批量相邻对比：版本级任务建模、排序、下载复用、pair 状态汇总和按 `COMPARE_CONCURRENCY` 并发对比已落地。
+6. [done] 实现批量相邻对比：版本级任务建模、排序、下载复用、pair 状态汇总和按 `DOWNLOAD_CONCURRENCY`、`DUMP_CONCURRENCY`、`COMPARE_CONCURRENCY` 分段并发已落地。
 7. [done] 实现报告 local/GCS/S3 存储和 signed URL。
 8. [done] 实现 API Key + 飞书 OAuth 管理后台，形态参考 APS。
 9. [done] 实现成功、失败、worker 启动和 TTL 四类清理：任务结束整目录清理、worker 启动孤儿目录清理和 TTL 兜底清理已落地。
@@ -572,7 +572,7 @@ services:
 - `app/api/routes.py` 支持 `/api/v1/unity-checks`、`/api/v1/comparisons`、`/api/v1/batch-comparisons`、`/api/v1/tasks/{taskId}`。
 - `app/auth/` 和 `app/admin/` 支持飞书 OAuth 单管理员登录、服务端 session、auth.sqlite API Key hash 存储，以及 API Key 创建/吊销。
 - `app/worker/loop.py` 可启动时清理非 running 的孤儿工作目录，按 `TASK_CONCURRENCY` 并发运行 queued task，并执行 TTL 兜底清理。
-- `app/worker/executor.py` 可执行 APS 下载、Unity 包判断、pair 成败汇总、按 `COMPARE_CONCURRENCY` 并发执行 pair 对比和任务结束清理。
+- `app/worker/executor.py` 可执行 APS 下载、Unity 包判断、pair 成败汇总、按 `DOWNLOAD_CONCURRENCY`、`DUMP_CONCURRENCY`、`COMPARE_CONCURRENCY` 分段并发和任务结束清理。
 - `app/aps/client.py` 已具备下载接口、APS `202` 轮询和重定向跟随能力，并已接入执行器。
 - `app/storage.py` 支持报告 local/GCS/S3 上传；查询任务时对 GCS/S3 artifact 实时生成 signed URL。
 - `app/unity/dumper.py` 支持扫描 APK/XAPK 内嵌 APK、提取 `libil2cpp.so`/`global-metadata.dat`，并在 `IL2CPP_DUMPER_PATH` 或仓库 `lib/product` 可用时运行 Il2CppDumper。

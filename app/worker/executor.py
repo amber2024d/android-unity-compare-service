@@ -26,8 +26,7 @@ class TaskExecutor:
             return
 
         try:
-            for version in task["versions"]:
-                await self._download_and_check(task, version)
+            await self._process_versions(task)
 
             task = self.store.get_task(task_id)
             versions = {version["id"]: version for version in task["versions"]}
@@ -44,7 +43,21 @@ class TaskExecutor:
             self._cleanup(task_id, failed=True)
             raise
 
-    async def _download_and_check(self, task: dict, version: dict) -> None:
+    async def _process_versions(self, task: dict) -> None:
+        download_semaphore = asyncio.Semaphore(self.settings.download_concurrency)
+        dump_semaphore = asyncio.Semaphore(self.settings.dump_concurrency)
+
+        async def process(version: dict) -> None:
+            async with download_semaphore:
+                target = await self._download_version(task, version)
+            if target is None:
+                return
+            async with dump_semaphore:
+                await asyncio.to_thread(self._check_and_dump, task, version, target)
+
+        await asyncio.gather(*(process(version) for version in task["versions"]))
+
+    async def _download_version(self, task: dict, version: dict) -> Path | None:
         target = Path(self.settings.work_dir) / task["taskId"] / "packages" / f"{version['id']}.apk"
         self.store.mark_version(version["id"], VersionStatus.DOWNLOAD_RUNNING)
         try:
@@ -55,7 +68,14 @@ class TaskExecutor:
             )
             self.store.set_version_paths(version["id"], package_path=target)
             self.store.mark_version(version["id"], VersionStatus.DOWNLOAD_SUCCEEDED)
-            self.store.mark_version(version["id"], VersionStatus.DUMP_RUNNING)
+            return target
+        except Exception as exc:
+            self.store.mark_version(version["id"], VersionStatus.FAILED, str(exc))
+            return None
+
+    def _check_and_dump(self, task: dict, version: dict, target: Path) -> None:
+        self.store.mark_version(version["id"], VersionStatus.DUMP_RUNNING)
+        try:
             if not looks_like_unity_package(target):
                 self.store.mark_version(version["id"], VersionStatus.UNITY_UNSUPPORTED, "包缺少 libil2cpp.so 或 global-metadata.dat")
                 return

@@ -245,6 +245,61 @@ def test_worker_uses_compare_concurrency(tmp_path, monkeypatch):
     assert sorted(seen) == sorted(pair["pairId"] for pair in task["comparisons"])
 
 
+def test_worker_uses_download_and_dump_concurrency(tmp_path, monkeypatch):
+    import asyncio
+
+    c = client(tmp_path)
+    task_id = c.post(
+        "/api/v1/batch-comparisons",
+        json={
+            "packageName": "com.example.game",
+            "versions": [
+                {"versionCode": "100"},
+                {"versionCode": "101"},
+                {"versionCode": "102"},
+            ],
+        },
+    ).json()["taskId"]
+    settings = get_settings()
+    settings.download_concurrency = 2
+    settings.dump_concurrency = 1
+    store = TaskStore(settings.task_db_path)
+    task = store.get_task(task_id)
+    executor = TaskExecutor(settings, store, FakeApsClient(unity=True))
+    lock = threading.Lock()
+    active_downloads = 0
+    max_downloads = 0
+    active_dumps = 0
+    max_dumps = 0
+
+    async def fake_download_version(task, version):
+        nonlocal active_downloads, max_downloads
+        with lock:
+            active_downloads += 1
+            max_downloads = max(max_downloads, active_downloads)
+        await asyncio.sleep(0.02)
+        with lock:
+            active_downloads -= 1
+        return settings.work_dir / task["taskId"] / "packages" / f"{version['id']}.apk"
+
+    def fake_check_and_dump(task, version, target):
+        nonlocal active_dumps, max_dumps
+        with lock:
+            active_dumps += 1
+            max_dumps = max(max_dumps, active_dumps)
+        time.sleep(0.02)
+        with lock:
+            active_dumps -= 1
+
+    monkeypatch.setattr(executor, "_download_version", fake_download_version)
+    monkeypatch.setattr(executor, "_check_and_dump", fake_check_and_dump)
+
+    asyncio.run(executor._process_versions(task))
+
+    assert max_downloads == 2
+    assert max_dumps == 1
+
+
 def test_startup_cleanup_removes_non_running_work_dirs(tmp_path):
     c = client(tmp_path)
     task_id = c.post(
