@@ -223,7 +223,7 @@ GET /discover
 
 `/discover` 不需要 API Key。原因是调用方需要先读契约，才能知道如何携带 API Key。它只暴露接口形状和能力边界，不返回任务数据、报告 URL、API Key 或云存储凭证。
 
-建议返回结构：
+建议返回结构。实际 `/discover.config.variables` 必须覆盖 `.env.example` 中的全部变量；密钥、生产 APS 地址和云凭证只暴露空默认值，不返回真实配置。
 
 ```json
 {
@@ -240,7 +240,7 @@ GET /discover
       "format": "Bearer <key>",
       "alt_header": "X-API-Key"
     },
-    "public_endpoints": ["/health", "/discover"],
+    "public_endpoints": ["/", "/health", "/discover", "/auth/login", "/auth/callback", "/auth/logout"],
     "api_key_endpoints": [
       "/api/v1/unity-checks",
       "/api/v1/comparisons",
@@ -249,7 +249,7 @@ GET /discover
       "/api/v1/tasks/{taskId}/cancel",
       "/api/v1/tasks/{taskId}/retry"
     ],
-    "session_endpoints": ["/", "/admin"]
+    "session_endpoints": ["/admin", "/admin/api-keys", "/admin/api-keys/{keyId}/revoke"]
   },
   "concepts": {
     "package_name": "Android 包名，是所有任务的应用标识。",
@@ -259,19 +259,54 @@ GET /discover
     "pair": "相邻两个版本的对比段。",
     "report_artifact": "上传到报告对象存储的 HTML、JSON 或其他报告文件，查询任务时返回短期 signed URL。"
   },
+  "statuses": {
+    "task": ["queued", "running", "succeeded", "partial_failed", "failed", "cancelled"],
+    "version": ["download_pending", "download_running", "download_succeeded", "dump_running", "unity_dumpable", "unity_unsupported", "failed", "cleaned"],
+    "pair": ["pending", "comparing", "uploading", "succeeded", "failed"]
+  },
   "endpoints": {
-    "tasks": {},
-    "system": {}
+    "tasks": {
+      "unity_check": {"method": "POST", "path": "/api/v1/unity-checks", "auth": "api_key"},
+      "single_compare": {"method": "POST", "path": "/api/v1/comparisons", "auth": "api_key"},
+      "batch_compare": {"method": "POST", "path": "/api/v1/batch-comparisons", "auth": "api_key"},
+      "get_task": {"method": "GET", "path": "/api/v1/tasks/{taskId}", "auth": "api_key"},
+      "cancel_task": {"method": "POST", "path": "/api/v1/tasks/{taskId}/cancel", "auth": "api_key"},
+      "retry_task": {"method": "POST", "path": "/api/v1/tasks/{taskId}/retry", "auth": "api_key"}
+    },
+    "admin": {
+      "admin_page": {"method": "GET", "path": "/admin", "auth": "session"},
+      "create_api_key": {"method": "POST", "path": "/admin/api-keys", "auth": "session"},
+      "revoke_api_key": {"method": "POST", "path": "/admin/api-keys/{keyId}/revoke", "auth": "session"}
+    },
+    "auth": {
+      "login": {"method": "GET", "path": "/auth/login", "auth": "public"},
+      "callback": {"method": "GET", "path": "/auth/callback", "auth": "public"},
+      "logout": {"method": "GET", "path": "/auth/logout", "auth": "public"}
+    },
+    "system": {
+      "health": {"method": "GET", "path": "/health", "auth": "public"},
+      "discover": {"method": "GET", "path": "/discover", "auth": "public"},
+      "home": {"method": "GET", "path": "/", "auth": "public"}
+    }
   },
   "errors": {
     "format": "{ error: <code>, message: <str>, details?: <object> }"
   },
   "config": {
     "variables": {
+      "PORT": {"default": "8080", "description": "API 服务监听端口"},
+      "PUBLIC_BASE_URL": {"default": "http://localhost:8080", "description": "公网访问根地址，用于 OAuth callback"},
+      "DATA_DIR": {"default": "data", "description": "SQLite 和 local report 数据目录"},
+      "WORK_DIR": {"default": "work", "description": "下载、dump、报告生成临时工作目录"},
+      "DB_PATH": {"default": "data/tasks.sqlite", "description": "任务 SQLite 数据库路径"},
+      "APS_BASE_URL": {"default": "", "description": "APS 服务地址；不在 discover 暴露真实值"},
+      "APS_API_KEY": {"default": "", "description": "APS API Key；不在 discover 暴露真实值"},
       "TASK_CONCURRENCY": {"default": "2", "description": "同时运行的顶层任务数"},
       "DOWNLOAD_CONCURRENCY": {"default": "4", "description": "同时从 APS 下载包的数量"},
       "DUMP_CONCURRENCY": {"default": "2", "description": "同时执行 Unity 检查和 Il2Cpp dump 的数量"},
-      "COMPARE_CONCURRENCY": {"default": "2", "description": "同时执行 pair 对比的数量"}
+      "COMPARE_CONCURRENCY": {"default": "2", "description": "同时执行 pair 对比的数量"},
+      "REPORT_STORAGE_BACKEND": {"default": "local", "description": "报告存储后端：local/gcs/s3"},
+      "OPENAI_API_KEY": {"default": "", "description": "配置后 HTML 报告会调用 OpenAI-compatible API 生成 AI 分析；不在 discover 暴露真实值"}
     }
   },
   "workflows": {

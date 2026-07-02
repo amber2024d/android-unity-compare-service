@@ -3,6 +3,7 @@ import http.server
 import socketserver
 import threading
 import time
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from fastapi.testclient import TestClient
 from zipfile import ZipFile
@@ -17,6 +18,9 @@ from app.unity.compare import compare_dummy_dirs
 from app.unity.dumper import extract_unity_inputs, looks_like_unity_package
 from app.worker.cleanup import remove_expired_work_dirs, remove_orphan_work_dirs
 from app.worker.executor import TaskExecutor
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture(autouse=True)
@@ -46,6 +50,32 @@ def test_health_and_discover(tmp_path):
     assert "REPORT_STORAGE_BACKEND" in body["config"]["variables"]
     assert "REPORT_S3_BUCKET" in body["config"]["variables"]
     assert "OPENAI_API_KEY" in body["config"]["variables"]
+
+
+def test_discover_lists_routes_and_env_example(tmp_path):
+    c = client(tmp_path)
+    body = c.get("/discover").json()
+    normalize = str.maketrans({"_": ""})
+    described_paths = {
+        endpoint["path"].translate(normalize).lower()
+        for group in body["endpoints"].values()
+        for endpoint in group.values()
+    }
+    actual_paths = {
+        route.path.translate(normalize).lower()
+        for route in app.routes
+        if hasattr(route, "path") and route.path not in {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
+    }
+    env_keys = {
+        line.split("=", 1)[0]
+        for line in (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#")
+    }
+
+    assert actual_paths <= described_paths
+    assert env_keys <= set(body["config"]["variables"])
+    assert body["config"]["variables"]["APS_BASE_URL"]["default"] == ""
+    assert body["config"]["variables"]["APS_API_KEY"]["default"] == ""
 
 
 def test_create_and_get_batch_task(tmp_path):
