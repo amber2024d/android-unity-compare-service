@@ -14,6 +14,8 @@ class ApsClient:
         self.settings = settings
 
     async def download(self, package_name: str, version: VersionRef, target: Path) -> Path:
+        if not self.settings.aps_base_url:
+            raise ValueError("APS_BASE_URL is required.")
         params = {}
         if version.version_code:
             params["versionCode"] = version.version_code

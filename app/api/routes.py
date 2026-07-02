@@ -172,6 +172,7 @@ async def discover(request: Request, settings: Settings = Depends(get_settings))
 def _discover_config_variables(settings: Settings) -> dict[str, dict[str, str]]:
     return {
         "PORT": {"default": str(settings.port), "description": "API 服务监听端口"},
+        "HOST_PORT": {"default": "18080", "description": "Docker Compose 暴露到宿主机的端口"},
         "PUBLIC_BASE_URL": {"default": settings.public_base_url, "description": "公网访问根地址，用于 OAuth callback"},
         "DATA_DIR": {"default": str(settings.data_dir), "description": "SQLite 和 local report 数据目录"},
         "WORK_DIR": {"default": str(settings.work_dir), "description": "下载、dump、报告生成临时工作目录"},
@@ -184,6 +185,7 @@ def _discover_config_variables(settings: Settings) -> dict[str, dict[str, str]]:
         "FEISHU_AUTH_BASE": {"default": settings.feishu_auth_base, "description": "飞书 OAuth 授权地址"},
         "FEISHU_API_BASE": {"default": settings.feishu_api_base, "description": "飞书 OpenAPI 地址"},
         "SESSION_TTL_HOURS": {"default": str(settings.session_ttl_hours), "description": "管理后台 session 有效期"},
+        "HTTP_TIMEOUT_SECONDS": {"default": str(settings.http_timeout_seconds), "description": "飞书 OAuth/OpenAPI HTTP 超时"},
         "APS_BASE_URL": {"default": "", "description": "APS 服务地址；不在 discover 暴露真实值"},
         "APS_API_KEY": {"default": "", "description": "APS API Key；不在 discover 暴露真实值"},
         "APS_DOWNLOAD_TIMEOUT_SECONDS": {"default": str(settings.aps_download_timeout_seconds), "description": "APS 下载超时"},
@@ -211,6 +213,9 @@ def _discover_config_variables(settings: Settings) -> dict[str, dict[str, str]]:
         "OPENAI_MODEL": {"default": "gpt-4.1", "description": "AI 分析使用的模型"},
         "KEEP_FAILED_WORK_DIR": {"default": str(settings.keep_failed_work_dir).lower(), "description": "失败任务是否保留本地工作目录"},
         "WORK_DIR_TTL_HOURS": {"default": str(settings.work_dir_ttl_hours), "description": "工作目录兜底清理 TTL"},
+        "WORKER_POLL_SECONDS": {"default": str(settings.worker_poll_seconds), "description": "worker 轮询 queued 任务和完成任务的间隔"},
+        "WEB_CONCURRENCY": {"default": "2", "description": "Gunicorn web worker 数量"},
+        "GUNICORN_TIMEOUT_SECONDS": {"default": "21600", "description": "Gunicorn 请求超时"},
     }
 
 

@@ -1,5 +1,7 @@
 import pytest
 import http.server
+import ast
+import re
 import socketserver
 import threading
 import time
@@ -76,6 +78,20 @@ def test_discover_lists_routes_and_env_example(tmp_path):
     assert env_keys <= set(body["config"]["variables"])
     assert body["config"]["variables"]["APS_BASE_URL"]["default"] == ""
     assert body["config"]["variables"]["APS_API_KEY"]["default"] == ""
+
+
+def test_env_example_settings_and_compose_are_aligned():
+    settings_keys = settings_env_keys()
+    env_keys = env_example_keys()
+    compose_keys = set(re.findall(r"^\s{6}([A-Z0-9_]+):", (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8"), re.M))
+
+    assert settings_keys <= env_keys
+    assert env_keys <= settings_keys | {"HOST_PORT", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "WEB_CONCURRENCY", "GUNICORN_TIMEOUT_SECONDS"}
+    assert env_keys == compose_keys | {"HOST_PORT"}
+    compose = (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "APS_BASE_URL: ${APS_BASE_URL:-}" in compose
+    assert "DATA_DIR: /app/data" in compose
+    assert "IL2CPP_DUMPER_PATH: /app/lib/product/Il2CppDumper/linux/Il2CppDumper" in compose
 
 
 def test_create_and_get_batch_task(tmp_path):
@@ -818,3 +834,23 @@ def unity_zip_bytes():
         archive.writestr("lib/arm64-v8a/libil2cpp.so", b"lib")
         archive.writestr("assets/bin/Data/Managed/Metadata/global-metadata.dat", b"metadata")
     return buffer.getvalue()
+
+
+def env_example_keys():
+    return {
+        line.split("=", 1)[0]
+        for line in (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#")
+    }
+
+
+def settings_env_keys():
+    tree = ast.parse((PROJECT_ROOT / "app" / "config.py").read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == "Settings":
+            return {
+                item.target.id.upper()
+                for item in node.body
+                if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
+            }
+    return set()

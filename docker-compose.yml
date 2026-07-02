@@ -3,9 +3,9 @@ services:
     build: .
     platform: linux/amd64
     ports:
-      - "18080:8080"
+      - "${HOST_PORT:-18080}:${PORT:-8080}"
     environment: &compare_environment
-      PORT: 8080
+      PORT: ${PORT:-8080}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:18080}
       DATA_DIR: /app/data
       WORK_DIR: /app/work
@@ -18,15 +18,18 @@ services:
       FEISHU_AUTH_BASE: ${FEISHU_AUTH_BASE:-https://accounts.feishu.cn}
       FEISHU_API_BASE: ${FEISHU_API_BASE:-https://open.feishu.cn}
       SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-24}
-      APS_BASE_URL: ${APS_BASE_URL:-http://host.docker.internal:11010}
+      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-30}
+      APS_BASE_URL: ${APS_BASE_URL:-}
       APS_API_KEY: ${APS_API_KEY:-}
+      APS_DOWNLOAD_TIMEOUT_SECONDS: ${APS_DOWNLOAD_TIMEOUT_SECONDS:-21600}
+      APS_JOB_POLL_SECONDS: ${APS_JOB_POLL_SECONDS:-10}
       TASK_CONCURRENCY: ${TASK_CONCURRENCY:-2}
       DOWNLOAD_CONCURRENCY: ${DOWNLOAD_CONCURRENCY:-4}
       DUMP_CONCURRENCY: ${DUMP_CONCURRENCY:-2}
       COMPARE_CONCURRENCY: ${COMPARE_CONCURRENCY:-2}
-      IL2CPP_DUMPER_PATH: ${IL2CPP_DUMPER_PATH:-/app/lib/product/Il2CppDumper/linux/Il2CppDumper}
+      IL2CPP_DUMPER_PATH: /app/lib/product/Il2CppDumper/linux/Il2CppDumper
       IL2CPP_DUMPER_TIMEOUT_SECONDS: ${IL2CPP_DUMPER_TIMEOUT_SECONDS:-3600}
-      DLL_ANALYZER_PATH: ${DLL_ANALYZER_PATH:-/app/lib/product/DllAnalyzer/linux/DllAnalyzer}
+      DLL_ANALYZER_PATH: /app/lib/product/DllAnalyzer/linux/DllAnalyzer
       DLL_ANALYZER_TIMEOUT_SECONDS: ${DLL_ANALYZER_TIMEOUT_SECONDS:-300}
       REPORT_STORAGE_BACKEND: ${REPORT_STORAGE_BACKEND:-local}
       REPORT_SIGNED_URL_TTL_SECONDS: ${REPORT_SIGNED_URL_TTL_SECONDS:-3600}
@@ -38,13 +41,19 @@ services:
       REPORT_S3_ENDPOINT_URL: ${REPORT_S3_ENDPOINT_URL:-}
       REPORT_S3_ACCESS_KEY_ID: ${REPORT_S3_ACCESS_KEY_ID:-}
       REPORT_S3_SECRET_ACCESS_KEY: ${REPORT_S3_SECRET_ACCESS_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1}
       KEEP_FAILED_WORK_DIR: ${KEEP_FAILED_WORK_DIR:-false}
       WORK_DIR_TTL_HOURS: ${WORK_DIR_TTL_HOURS:-24}
+      WORKER_POLL_SECONDS: ${WORKER_POLL_SECONDS:-2}
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      GUNICORN_TIMEOUT_SECONDS: ${GUNICORN_TIMEOUT_SECONDS:-21600}
     volumes: &compare_volumes
       - ./data:/app/data
       - ./work:/app/work
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=3).read()"]
+      test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen(f\"http://localhost:{os.environ.get('PORT', '8080')}/health\", timeout=3).read()"]
       interval: 30s
       timeout: 5s
       retries: 3

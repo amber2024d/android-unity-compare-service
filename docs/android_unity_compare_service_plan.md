@@ -154,6 +154,7 @@ FEISHU_APP_SECRET=...
 FEISHU_AUTH_BASE=https://accounts.feishu.cn
 FEISHU_API_BASE=https://open.feishu.cn
 SESSION_TTL_HOURS=24
+HTTP_TIMEOUT_SECONDS=30
 ```
 
 实现方式复用 APS 的形态：独立 `auth.sqlite`，API Key 只存 hash，服务端 session，OAuth state 落库。
@@ -166,6 +167,7 @@ SESSION_TTL_HOURS=24
 
 ```env
 PORT=8080
+HOST_PORT=18080
 PUBLIC_BASE_URL=https://compare.example.com
 
 APS_BASE_URL=...
@@ -205,6 +207,9 @@ OPENAI_MODEL=gpt-4.1
 
 KEEP_FAILED_WORK_DIR=false
 WORK_DIR_TTL_HOURS=24
+WORKER_POLL_SECONDS=2
+WEB_CONCURRENCY=2
+GUNICORN_TIMEOUT_SECONDS=21600
 ```
 
 ## 自描述接口
@@ -581,9 +586,15 @@ services:
     build: .
     platform: linux/amd64
     ports:
-      - "18080:8080"
+      - "${HOST_PORT:-18080}:${PORT:-8080}"
     environment:
-      PORT: 8080
+      PORT: ${PORT:-8080}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:18080}
+      DATA_DIR: /app/data
+      WORK_DIR: /app/work
+      DB_PATH: /app/data/tasks.sqlite
+      APS_BASE_URL: ${APS_BASE_URL:-}
+      APS_API_KEY: ${APS_API_KEY:-}
       IL2CPP_DUMPER_PATH: /app/lib/product/Il2CppDumper/linux/Il2CppDumper
       DLL_ANALYZER_PATH: /app/lib/product/DllAnalyzer/linux/DllAnalyzer
     volumes:
@@ -595,7 +606,13 @@ services:
     platform: linux/amd64
     command: ["python", "-m", "app.worker.loop"]
     environment:
-      PORT: 8080
+      PORT: ${PORT:-8080}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:18080}
+      DATA_DIR: /app/data
+      WORK_DIR: /app/work
+      DB_PATH: /app/data/tasks.sqlite
+      APS_BASE_URL: ${APS_BASE_URL:-}
+      APS_API_KEY: ${APS_API_KEY:-}
       IL2CPP_DUMPER_PATH: /app/lib/product/Il2CppDumper/linux/Il2CppDumper
       DLL_ANALYZER_PATH: /app/lib/product/DllAnalyzer/linux/DllAnalyzer
     volumes:

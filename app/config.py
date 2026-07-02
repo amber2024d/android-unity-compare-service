@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     session_ttl_hours: float = 24.0
     http_timeout_seconds: float = 30.0
 
-    aps_base_url: str = "http://localhost:11010"
+    aps_base_url: str = ""
     aps_api_key: str | None = None
     aps_download_timeout_seconds: float = 21600.0
     aps_job_poll_seconds: float = 10.0
