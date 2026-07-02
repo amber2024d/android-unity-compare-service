@@ -5,8 +5,8 @@
 - 项目地图：[PROJECT_MAP.md](PROJECT_MAP.md)
 - 当前方案文档：[docs/android_unity_compare_service_plan.md](docs/android_unity_compare_service_plan.md)
 - Git 提交规范：[docs/git_commit_convention.md](docs/git_commit_convention.md)
-- 主监控项目：`/Users/chenshuai/PycharmProjects/UnityAppVersionMonitor`
-- Android Package Service：`/Users/chenshuai/VSCodeProjects/android-package-service`
+- 主监控项目：`../../PycharmProjects/UnityAppVersionMonitor`
+- Android Package Service：`../android-package-service`
 
 ## 文档约定
 

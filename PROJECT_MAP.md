@@ -5,8 +5,8 @@
 - 方案和开发状态：`docs/android_unity_compare_service_plan.md`
 - Git 提交规范：`docs/git_commit_convention.md`
 - Agent 工作约定：`AGENTS.md`
-- 参考主监控项目：`/Users/chenshuai/PycharmProjects/UnityAppVersionMonitor`
-- 参考 APS 项目：`/Users/chenshuai/VSCodeProjects/android-package-service`
+- 参考主监控项目：`../../PycharmProjects/UnityAppVersionMonitor`
+- 参考 APS 项目：`../android-package-service`
 
 ## 当前代码结构
 

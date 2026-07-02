@@ -2,8 +2,8 @@
 
 ## 参考项目
 
-- 主监控项目：`/Users/chenshuai/PycharmProjects/UnityAppVersionMonitor`
-- Android Package Service：`/Users/chenshuai/VSCodeProjects/android-package-service`
+- 主监控项目：`../../PycharmProjects/UnityAppVersionMonitor`
+- Android Package Service：`../android-package-service`
 
 ## 目标
 
