@@ -27,6 +27,10 @@ def run_forever() -> None:
     settings.ensure_directories()
     store = TaskStore(settings.task_db_path)
     logger.info("compare worker started")
+    # 单 worker 架构下，启动时仍处于 running 的任务必然是上次进程中断的孤儿，标记失败后可通过 retry 重新提交。
+    stale = store.fail_stale_running_tasks("worker 重启导致任务中断，可调用 retry 重新提交")
+    if stale:
+        logger.info("marked %s stale running tasks as failed: %s", len(stale), ", ".join(stale))
     removed = remove_orphan_work_dirs(settings.work_dir, store.running_task_ids())
     if removed:
         logger.info("removed %s orphan work dirs", removed)

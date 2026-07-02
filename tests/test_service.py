@@ -561,6 +561,32 @@ def test_startup_cleanup_removes_non_running_work_dirs(tmp_path):
     assert not orphan_dir.exists()
 
 
+def test_startup_marks_stale_running_tasks_failed(tmp_path):
+    c = client(tmp_path)
+    task_id = c.post(
+        "/api/v1/comparisons",
+        json={
+            "packageName": "com.example.game",
+            "oldVersion": {"versionCode": "100"},
+            "newVersion": {"versionCode": "101"},
+        },
+    ).json()["taskId"]
+    settings = get_settings()
+    store = TaskStore(settings.task_db_path)
+    assert store.claim_tasks(1) == [task_id]
+    stale_dir = settings.work_dir / task_id
+    stale_dir.mkdir(parents=True)
+
+    assert store.fail_stale_running_tasks("worker 重启导致任务中断，可调用 retry 重新提交") == [task_id]
+    assert remove_orphan_work_dirs(settings.work_dir, store.running_task_ids()) == 1
+
+    assert not stale_dir.exists()
+    task = c.get(f"/api/v1/tasks/{task_id}").json()
+    assert task["status"] == "failed"
+    assert "retry" in task["error"]
+    assert c.post(f"/api/v1/tasks/{task_id}/retry").json()["retryOf"] == task_id
+
+
 def test_ttl_cleanup_keeps_running_work_dirs(tmp_path):
     work_dir = tmp_path / "work"
     running_dir = work_dir / "running"

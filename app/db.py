@@ -165,6 +165,15 @@ class TaskStore:
             rows = conn.execute("SELECT id FROM tasks WHERE status = ?", (TaskStatus.RUNNING,)).fetchall()
             return {row["id"] for row in rows}
 
+    def fail_stale_running_tasks(self, error: str) -> list[str]:
+        with self.connect() as conn:
+            now = utc_now()
+            rows = conn.execute(
+                "UPDATE tasks SET status = ?, error = ?, updated_at = ?, finished_at = ? WHERE status = ? RETURNING id",
+                (TaskStatus.FAILED, error, now, now, TaskStatus.RUNNING),
+            ).fetchall()
+            return [row["id"] for row in rows]
+
     def mark_task(self, task_id: str, status: TaskStatus, error: str | None = None) -> None:
         finished = utc_now() if status in {
             TaskStatus.SUCCEEDED,
